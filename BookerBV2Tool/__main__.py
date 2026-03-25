@@ -21,7 +21,7 @@ def main():
                         help='The minimum milliseconds for a silence part to be sliced')
     slice_parser.add_argument('-hs', '--hop_size', type=int, required=False, default=10,
                         help='Frame length in milliseconds')
-    slice_parser.add_argument('-ms', '--max_sil_kept', type=int, required=False, default=500,
+    slice_parser.add_argument('-mk', '--max_sil_kept', type=int, required=False, default=500,
                         help='The maximum silence length kept around the sliced clip, presented in milliseconds')
     slice_parser.set_defaults(func=slice)
 
