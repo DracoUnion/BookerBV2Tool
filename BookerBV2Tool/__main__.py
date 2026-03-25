@@ -5,7 +5,7 @@ from . import __version__
 from .slice import slice
 
 def main():
-    parser = argparse.ArgumentParser(prog="BookerGptTool", formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-v", "--version", action="version", version=f"PYBP version: {__version__}")
     parser.set_defaults(func=lambda x: parser.print_help())
     subparsers = parser.add_subparsers()
