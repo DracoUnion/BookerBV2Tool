@@ -10,7 +10,7 @@ def main():
     parser.set_defaults(func=lambda x: parser.print_help())
     subparsers = parser.add_subparsers()
     
-    slice_parser = subparsers.add_parser("trans-yaml", help="translate YAML files")
+    slice_parser = subparsers.add_parser("slice", help="slice audio")
     slice_parser.add_argument('audio', type=str, help='The audio to be sliced')
     slice_parser.add_argument('-o', '--out', type=str, help='Output directory of the sliced audio clips')
     slice_parser.add_argument('-dt', '--db_thresh', type=float, required=False, default=-40,
