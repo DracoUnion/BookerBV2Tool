@@ -168,7 +168,7 @@ class Slicer:
             return chunks
 
 
-def slice(args):
+def slice_handle(args):
     out = args.out
     if out is None:
         out = os.path.dirname(os.path.abspath(args.audio))

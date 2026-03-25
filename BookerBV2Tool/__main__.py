@@ -2,7 +2,7 @@ import argparse
 import sys
 import os
 from . import __version__
-from .slice import slice
+from .slice import slice_handle
 
 def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -23,7 +23,7 @@ def main():
                         help='Frame length in milliseconds')
     slice_parser.add_argument('-mk', '--max_sil_kept', type=int, required=False, default=500,
                         help='The maximum silence length kept around the sliced clip, presented in milliseconds')
-    slice_parser.set_defaults(func=slice)
+    slice_parser.set_defaults(func=slice_handle)
 
 
     args = parser.parse_args()
