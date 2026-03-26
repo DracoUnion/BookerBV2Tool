@@ -28,7 +28,7 @@ def main():
 
     resample_parser = subparsers.add_parser("resample", help="resample audio")
     resample_parser.add_argument('audio', type=str, help='The audio to be sliced')
-    resample_parser.add_argument('--sr', type=int, default=16000, help="sampling rate")
+    resample_parser.add_argument('--sr', type=int, default=44100, help="sampling rate")
     resample_parser.add_argument('-t', '--threads', type=int, default=8, help="num of threads")
     resample_parser.add_argument('-o', '--out', type=str, default='.', help="output dir")
     resample_parser.set_defaults(func=resample_handle)
