@@ -13,23 +13,23 @@ def resample_file_safe(args):
         traceback.print_exc()
 
 def resample_file(args):
-    if not args.fname.lower().endswith('.wav'):
+    if not args.audio.lower().endswith('.wav'):
         print('请提供 WAV 文件')
         return
     os.makedirs(args.out, exist_ok=True)
-    ofname = path.join(args.out, path.basename(args.fname))
-    wav, sr = librosa.load(args.fname, sr=args.sr)
+    ofname = path.join(args.out, path.basename(args.audio))
+    wav, sr = librosa.load(args.audio, sr=args.sr)
     soundfile.write(ofname, wav, sr)
 
 def resample_dir(args):
     pool = ThreadPoolExecutor(args.threads)
     hdls = []
 
-    dir = args.fname
+    dir = args.audio
     fnames = os.listdir(dir)
     for f in fnames:
         args = copy.deepcopy(args)
-        args.fname = path.join(dir, f)
+        args.audio = path.join(dir, f)
         h = pool.submit(resample_file_safe, args)
         hdls.append(h)
         if len(hdls) > args.threads:
@@ -40,7 +40,7 @@ def resample_dir(args):
         h.result()
 
 def resample_handle(args):
-    if path.isfile(args.fname):
+    if path.isfile(args.audio):
         resample_file(args)
     else:
         resample_dir(args)

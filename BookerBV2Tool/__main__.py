@@ -3,6 +3,7 @@ import sys
 import os
 from . import __version__
 from .slice import slice_handle
+from .resample import resample_handle
 
 def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -25,6 +26,12 @@ def main():
                         help='The maximum silence length kept around the sliced clip, presented in milliseconds')
     slice_parser.set_defaults(func=slice_handle)
 
+    resample_parser = subparsers.add_parser("resample", help="resample audio")
+    resample_parser.add_argument('audio', type=str, help='The audio to be sliced')
+    resample_parser.add_argument('--sr', type=int, default=16000, help="sampling rate")
+    resample_parser.add_argument('-t', '--threads', type=int, default=8, help="num of threads")
+    resample_parser.add_argument('-o', '--out', type=str, default='.', help="output dir")
+    resample_parser.set_defaults(func=resample_handle)
 
     args = parser.parse_args()
     args.func(args)
