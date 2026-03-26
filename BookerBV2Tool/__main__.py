@@ -36,7 +36,7 @@ def main():
 
     mark_parser = subparsers.add_parser("mark", help="mark audio")
     mark_parser.add_argument('audio', type=str, help='The audio to be sliced')
-    mark_parser.add_argument('-m', '--model', type=str,default=os.environ.get('SENCEVOICE_PATH', '') , help='SenceVoice model path')
+    mark_parser.add_argument('-m', '--model', type=str,default=os.environ.get('SENCEVOICE_MODEL_PATH', '') , help='SenceVoice model path')
     mark_parser.set_defaults(func=mark_handle)
 
 
