@@ -187,4 +187,6 @@ def slice_handle(args):
     for i, chunk in enumerate(chunks):
         if len(chunk.shape) > 1:
             chunk = chunk.T
-        soundfile.write(os.path.join(out, f'%s_%d.wav' % (os.path.basename(args.audio).rsplit('.', maxsplit=1)[0], i)), chunk, sr)
+        ofname = os.path.join(out, f'%s_%d.wav' % (os.path.basename(args.audio).rsplit('.', maxsplit=1)[0], i))
+        print(ofname)
+        soundfile.write(ofname, chunk, sr)

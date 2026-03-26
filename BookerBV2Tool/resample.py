@@ -16,6 +16,7 @@ def resample_file(args):
     if not args.audio.lower().endswith('.wav'):
         print('请提供 WAV 文件')
         return
+    print(args.audio)
     os.makedirs(args.out, exist_ok=True)
     ofname = path.join(args.out, path.basename(args.audio))
     wav, sr = librosa.load(args.audio, sr=args.sr)

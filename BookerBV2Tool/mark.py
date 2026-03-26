@@ -13,6 +13,7 @@ def mark_file(args):
     res = sencevoice(args)
     txt = ' '.join([r['text'] for r in res])
     ofname = args.audio + '.txt'
+    print(ofname)
     open(ofname, 'w', encoding='utf8').write(txt)
 
 def mark_dir(args):
