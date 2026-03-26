@@ -14,8 +14,8 @@ import argparse
 def sencevoice(args):
 
     # 模型路径
-    model_dir = args.sencevoice #r"D:\src\SenseVoiceSmall"
-    vad_model_dir = path.join(args.sencevoice, "fsmn-vad")  # VAD模型路径
+    model_dir = args.model #r"D:\src\SenseVoiceSmall"
+    vad_model_dir = path.join(args.model, "fsmn-vad")  # VAD模型路径
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # 音频文件路径

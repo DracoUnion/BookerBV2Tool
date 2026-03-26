@@ -4,6 +4,7 @@ import os
 from . import __version__
 from .slice import slice_handle
 from .resample import resample_handle
+from .mark import mark_handle
 
 def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -32,6 +33,12 @@ def main():
     resample_parser.add_argument('-t', '--threads', type=int, default=8, help="num of threads")
     resample_parser.add_argument('-o', '--out', type=str, default='.', help="output dir")
     resample_parser.set_defaults(func=resample_handle)
+
+    mark_parser = subparsers.add_parser("mark", help="mark audio")
+    mark_parser.add_argument('audio', type=str, help='The audio to be sliced')
+    mark_parser.add_argument('-m', '--model', type=str,default=os.environ.get('SENCEVOICE_PATH', '') , help='SenceVoice model path')
+    mark_parser.set_defaults(func=mark_handle)
+
 
     args = parser.parse_args()
     args.func(args)
