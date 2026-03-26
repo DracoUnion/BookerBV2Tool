@@ -41,6 +41,8 @@ keywords = [
 dependencies = [
     "librosa",
     "soundfile",
+    "torch",
+    "funasr",
 ]
 
 [project.urls]

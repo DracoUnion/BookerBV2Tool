@@ -1,2 +1,4 @@
 librosa
 soundfile
+funasr
+torch
