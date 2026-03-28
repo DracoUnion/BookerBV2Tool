@@ -44,6 +44,12 @@ dependencies = [
     "torch",
     "funasr",
     "pypinyin",
+    "tn",
+    "num2words",
+    "pyopenjtalk",
+    "jaconv",
+    "jieba",
+    "cn2an",
 ]
 
 [project.urls]

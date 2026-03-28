@@ -3,8 +3,8 @@ import re
 
 from pypinyin import lazy_pinyin, Style
 
-from text.symbols import punctuation
-from text.tone_sandhi import ToneSandhi
+from .symbols import punctuation
+from .tone_sandhi import ToneSandhi
 
 try:
     from tn.chinese.normalizer import Normalizer

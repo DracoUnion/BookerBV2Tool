@@ -4,8 +4,8 @@ import re
 from g2p_en import G2p
 from transformers import DebertaV2Tokenizer
 
-from text import symbols
-from text.symbols import punctuation
+from . import symbols
+from .symbols import punctuation
 
 current_file_path = os.path.dirname(__file__)
 CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")

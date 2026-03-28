@@ -3,7 +3,6 @@ import sys
 import torch
 from transformers import DebertaV2Model, DebertaV2Tokenizer
 
-from config import config
 
 
 LOCAL_PATH = "./bert/deberta-v3-large"
@@ -16,7 +15,7 @@ models = dict()
 def get_bert_feature(
     text,
     word2ph,
-    device=config.bert_gen_config.device,
+    device='cuda' if torch.cuda.is_available() else 'cpu',
     style_text=None,
     style_weight=0.7,
 ):
