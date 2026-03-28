@@ -5,6 +5,7 @@ from . import __version__
 from .slice import slice_handle
 from .resample import resample_handle
 from .mark import mark_handle
+from .mklist import mklist_handle
 
 def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -38,6 +39,12 @@ def main():
     mark_parser.add_argument('audio', type=str, help='The audio to be sliced')
     mark_parser.add_argument('-m', '--model', type=str,default=os.environ.get('SENCEVOICE_MODEL_PATH', '') , help='SenceVoice model path')
     mark_parser.set_defaults(func=mark_handle)
+
+    mklist_parser = subparsers.add_parser("mklist", help="mark audio")
+    mklist_parser.add_argument('dir', type=str, help='The audio dir')
+    mklist_parser.add_argument('-r', "--role", default='wizard', type=str, help='role name')
+    mklist_parser.add_argument('-l', '--lang', type=str,default='ZH', choices=['EN', 'ZH', 'JP'] , help='language')
+    mklist_parser.set_defaults(func=mklist_handle)
 
 
     args = parser.parse_args()
