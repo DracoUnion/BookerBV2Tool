@@ -43,6 +43,7 @@ dependencies = [
     "soundfile",
     "torch",
     "funasr",
+    "pypinyin",
 ]
 
 [project.urls]

@@ -2,3 +2,4 @@ librosa
 soundfile
 funasr
 torch
+pypinyin
