@@ -12,8 +12,7 @@ def mklist_handle(args):
     res = []
     for f in audios:
         print(f)
-        sub_fname = f[:-4] + '.txt'
-        sub_fname = path.join(args.dir, sub_fname)
+        sub_fname = path.join(args.dir, f + '.txt')
         if not path.isfile(sub_fname):
             print(f'{sub_fname} 不存在')
             continue
