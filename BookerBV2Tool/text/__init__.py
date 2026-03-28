@@ -52,5 +52,5 @@ def init_openjtalk():
         pyopenjtalk.g2p("こんにちは，世界。")
 
 
-init_openjtalk()
-check_bert_models()
+# init_openjtalk()
+# check_bert_models()
