@@ -12,6 +12,9 @@ def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-v", "--version", action="version", version=f"PYBP version: {__version__}")
     parser.add_argument('-sv', '--sencevoice', type=str,default=os.environ.get('SENCEVOICE_MODEL_PATH', '') , help='SenceVoice model path')
+    parser.add_argument('-eb', '--enlish-bert', type=str,default='microsoft/deberta-v3-large' , help='SenceVoice model path')
+    parser.add_argument('-cb', '--chinese-bert', type=str,default='hfl/chinese-roberta-wwm-ext-large' , help='SenceVoice model path')
+    parser.add_argument('-jb', '--japanese-bert', type=str,default='ku-nlp/deberta-v2-large-japanese-char-wwm' , help='SenceVoice model path')
     parser.set_defaults(func=lambda x: parser.print_help())
     subparsers = parser.add_subparsers()
     
