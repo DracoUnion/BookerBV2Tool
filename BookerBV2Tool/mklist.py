@@ -16,7 +16,10 @@ def mklist_handle(args):
         if not path.isfile(sub_fname):
             print(f'{sub_fname} 不存在')
             continue
-        sub = open(sub_fname, encoding='utf8').read()
+        sub = open(sub_fname, encoding='utf8').read().strip()
+        if not sub:
+            print(f'{sub_fname} 为空')
+            continue
         res.append(f'{f}|{args.role}|{args.lang}|{sub}')
 
     if not res:
