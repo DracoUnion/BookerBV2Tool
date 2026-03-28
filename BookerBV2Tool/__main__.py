@@ -6,6 +6,7 @@ from .slice import slice_handle
 from .resample import resample_handle
 from .mark import mark_handle
 from .mklist import mklist_handle
+from .preproc import preprocess_handle
 
 def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -45,6 +46,15 @@ def main():
     mklist_parser.add_argument('-r', "--role", default='wizard', type=str, help='role name')
     mklist_parser.add_argument('-l', '--lang', type=str,default='ZH', choices=['EN', 'ZH', 'JP'] , help='language')
     mklist_parser.set_defaults(func=mklist_handle)
+
+    preproc_parser = subparsers.add_parser("preproc", help="preproccess speaker list")
+    preproc_parser.add_argument('transcription_path', type=str, help='transcription path')
+    preproc_parser.add_argument('-tp', "--train-path", default='train.list', type=str, help='train path')
+    preproc_parser.add_argument('-vp', "--val-path", default='val.list', type=str, help='val path')
+    preproc_parser.add_argument('-cp', "--config-path", default='config.json', type=str, help='config path')
+    preproc_parser.add_argument('-vl', '--val-per-lang', type=int,default=4, help='val per lang')
+    preproc_parser.add_argument('-mv', '--max-val-total', type=int,default=12, help='max val total')
+    preproc_parser.set_defaults(func=preprocess_handle)
 
 
     args = parser.parse_args()

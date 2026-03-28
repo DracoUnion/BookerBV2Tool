@@ -8,7 +8,7 @@ from .text.cleaner import clean_text
 DIR = path.dirname(__file__)
 RAW_CONFIG_PATH = path.join(DIR, 'config.json')
 
-def preprocess(args):
+def preprocess_handle(args):
     transcription_path = args.transcription_path
     train_path = args.train_path
     val_path = args.val_path
