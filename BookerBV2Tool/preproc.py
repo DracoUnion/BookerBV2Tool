@@ -3,6 +3,7 @@ from os import path
 import os
 from collections import defaultdict
 from random import shuffle
+from .text.cleaner import clean_text
 
 DIR = path.dirname(__file__)
 RAW_CONFIG_PATH = path.join(DIR, 'config.json')
