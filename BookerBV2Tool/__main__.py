@@ -11,6 +11,7 @@ from .preproc import preprocess_handle
 def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-v", "--version", action="version", version=f"PYBP version: {__version__}")
+    parser.add_argument('-sv', '--sencevoice', type=str,default=os.environ.get('SENCEVOICE_MODEL_PATH', '') , help='SenceVoice model path')
     parser.set_defaults(func=lambda x: parser.print_help())
     subparsers = parser.add_subparsers()
     
@@ -38,7 +39,6 @@ def main():
 
     mark_parser = subparsers.add_parser("mark", help="mark audio")
     mark_parser.add_argument('audio', type=str, help='The audio to be sliced')
-    mark_parser.add_argument('-m', '--model', type=str,default=os.environ.get('SENCEVOICE_MODEL_PATH', '') , help='SenceVoice model path')
     mark_parser.set_defaults(func=mark_handle)
 
     mklist_parser = subparsers.add_parser("mklist", help="mark audio")
