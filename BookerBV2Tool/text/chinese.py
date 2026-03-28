@@ -6,15 +6,9 @@ from pypinyin import lazy_pinyin, Style
 from .symbols import punctuation
 from .tone_sandhi import ToneSandhi
 
-try:
-    from tn.chinese.normalizer import Normalizer
+import cn2an
 
-    normalizer = Normalizer().normalize
-except ImportError:
-    import cn2an
-
-    print("tn.chinese.normalizer not found, use cn2an normalizer")
-    normalizer = lambda x: cn2an.transform(x, "an2cn")
+normalizer = lambda x: cn2an.transform(x, "an2cn")
 
 current_file_path = os.path.dirname(__file__)
 pinyin_to_symbol_map = {

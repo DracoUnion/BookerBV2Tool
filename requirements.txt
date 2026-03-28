@@ -3,7 +3,6 @@ soundfile
 funasr
 torch
 pypinyin
-tn
 num2words
 pyopenjtalk
 jaconv
