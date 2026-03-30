@@ -7,6 +7,7 @@ from .resample import resample_handle
 from .mark import mark_handle
 from .mklist import mklist_handle
 from .preproc import preprocess_handle
+from .bert_gen import bert_gen_handle
 
 def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -59,6 +60,14 @@ def main():
     preproc_parser.add_argument('-mv', '--max-val-total', type=int,default=12, help='max val total')
     preproc_parser.set_defaults(func=preprocess_handle)
 
+    bert_gen_parser = subparsers.add_parser("bert-gen", help="gen bert vectors")
+    bert_gen_parser.add_argument(
+        "-c", "--config", type=str, default='config.json'
+    )
+    bert_gen_parser.add_argument(
+        "--num_processes", type=int, default=8
+    )
+    bert_gen_parser.set_defaults(func=bert_gen_handle)
 
     args = parser.parse_args()
     args.func(args)
