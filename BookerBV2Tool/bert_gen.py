@@ -1,7 +1,7 @@
 import json
 import torch
 from multiprocessing import Pool
-import commons
+from . import commons
 from os import path
 import utils
 from tqdm import tqdm
