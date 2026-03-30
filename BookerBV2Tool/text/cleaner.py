@@ -1,4 +1,4 @@
-from . import chinese, japanese, english, cleaned_text_to_sequence
+from . import chinese, japanese, english
 from .symbols import *
 import torch
 from transformers import AutoTokenizer, AutoModelForMaskedLM
