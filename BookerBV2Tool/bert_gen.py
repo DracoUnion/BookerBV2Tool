@@ -5,7 +5,7 @@ import commons
 from os import path
 import utils
 from tqdm import tqdm
-from .text.cleaner import cleaned_text_to_sequence
+from .text.cleaner import cleaned_text_to_sequence, get_bert_feature, get_model_name_by_lang
 import argparse
 import torch.multiprocessing as mp
 
