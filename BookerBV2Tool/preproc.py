@@ -47,7 +47,12 @@ def preprocess_handle(args):
                     " ".join([str(i) for i in word2ph]),
                 ))
         with open(cleaned_path, "w", encoding="utf-8") as of:
-            of.write('\n'.join("{}|{}|{}|{}|{}|{}|{}".format(*cleaned)))
+            of.write(
+                '\n'.join(
+                        "{}|{}|{}|{}|{}|{}|{}".format(c)
+                        for c in cleaned
+                    )
+                )
     else:
         with open(cleaned_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
@@ -63,7 +68,7 @@ def preprocess_handle(args):
     countNotFound = 0
     print(cleaned)
     for utt, spk, language, text, phones, tones, word2ph in cleaned:
-        line = "{}|{}|{}|{}|{}|{}|{}".format(*cleaned)
+        line = "{}|{}|{}|{}|{}|{}|{}".format(utt, spk, language, text, phones, tones, word2ph)
         if utt in audioPaths:
             # 过滤数据集错误：相同的音频匹配多个文本，导致后续bert出问题
             print(f"重复音频文本：{line}")
