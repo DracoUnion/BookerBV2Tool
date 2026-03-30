@@ -100,59 +100,16 @@ def process_line(x):
         torch.save(bert, bert_vec_path)
 
 
-
-class HParams:
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            if type(v) == dict:
-                v = HParams(**v)
-            self[k] = v
-
-    def keys(self):
-        return self.__dict__.keys()
-
-    def items(self):
-        return self.__dict__.items()
-
-    def values(self):
-        return self.__dict__.values()
-
-    def __len__(self):
-        return len(self.__dict__)
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def __setitem__(self, key, value):
-        return setattr(self, key, value)
-
-    def __contains__(self, key):
-        return key in self.__dict__
-
-    def __repr__(self):
-        return self.__dict__.__repr__()
-
-
-def get_hparams_from_file(config_path):
-    # print("config_path: ", config_path)
-    with open(config_path, "r", encoding="utf-8") as f:
-        data = f.read()
-    config = json.loads(data)
-
-    hparams = HParams(**config)
-    return hparams
-
-
 def bert_gen_handle(args):
     config_path = args.config
-    hps = utils.get_hparams_from_file(config_path)
+    config = json.loads(open(config_path, encoding='utf8').read())
     lines = []
-    with open(hps.data.training_files, encoding="utf-8") as f:
+    with open(config['data']['training_files'], encoding="utf-8") as f:
         lines.extend(f.readlines())
 
-    with open(hps.data.validation_files, encoding="utf-8") as f:
+    with open(config['data']['validation_files'], encoding="utf-8") as f:
         lines.extend(f.readlines())
-    add_blank = [hps.data.add_blank] * len(lines)
+    add_blank = [config['data']['add_blank']] * len(lines)
 
     if len(lines) != 0:
         num_processes = args.num_processes

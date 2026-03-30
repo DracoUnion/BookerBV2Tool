@@ -50,6 +50,7 @@ dependencies = [
     "jieba",
     "cn2an",
     "g2p_en",
+    "scipy",
 ]
 
 [project.urls]
