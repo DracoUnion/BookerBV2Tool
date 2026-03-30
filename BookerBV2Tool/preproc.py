@@ -4,9 +4,20 @@ import os
 from collections import defaultdict
 from random import shuffle
 from .text.cleaner import clean_text
+from .text import chinese, japanese, english
+
+language_module_map = {"ZH": chinese, "JP": japanese, "EN": english}
 
 DIR = path.dirname(__file__)
 RAW_CONFIG_PATH = path.join(DIR, 'config.json')
+
+
+def clean_text(text, language):
+    language_module = language_module_map[language]
+    norm_text = language_module.text_normalize(text)
+    phones, tones, word2ph = language_module.g2p(norm_text)
+    return norm_text, phones, tones, word2ph
+
 
 def preprocess_handle(args):
     transcription_path = args.transcription_path

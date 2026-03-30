@@ -307,15 +307,6 @@ def get_hparams_from_dir(model_dir):
     return hparams
 
 
-def get_hparams_from_file(config_path):
-    # print("config_path: ", config_path)
-    with open(config_path, "r", encoding="utf-8") as f:
-        data = f.read()
-    config = json.loads(data)
-
-    hparams = HParams(**config)
-    return hparams
-
 
 def check_git_hash(model_dir):
     source_dir = os.path.dirname(os.path.realpath(__file__))
