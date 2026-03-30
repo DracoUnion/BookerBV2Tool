@@ -3,7 +3,7 @@ from os import path
 import os
 from collections import defaultdict
 from random import shuffle
-from .text.cleaner import clean_text
+from .text.cleaner import clean_text, get_model_name_by_lang
 from .text import chinese, japanese, english
 
 language_module_map = {"ZH": chinese, "JP": japanese, "EN": english}
@@ -34,6 +34,7 @@ def preprocess_handle(args):
         for line in lines:
             utt, spk, language, text = line.strip().split("|")
             norm_text, phones, tones, word2ph = clean_text(
+                get_model_name_by_lang(language, args),
                 text, language
             )
             cleaned.append("{}|{}|{}|{}|{}|{}|{}"
