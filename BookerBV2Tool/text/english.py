@@ -4,7 +4,7 @@ import re
 from g2p_en import G2p
 from transformers import AutoTokenizer
 
-from . import symbols
+from .symbols import en_symbols as symbols
 from .symbols import punctuation
 
 current_file_path = os.path.dirname(__file__)

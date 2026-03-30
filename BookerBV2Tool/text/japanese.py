@@ -5,7 +5,8 @@ import unicodedata
 
 from transformers import AutoTokenizer
 
-from . import symbols
+
+from .symbols import ja_symbols as symbols
 from .symbols import punctuation
 
 from num2words import num2words
