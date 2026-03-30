@@ -5,29 +5,11 @@ import commons
 from os import path
 import utils
 from tqdm import tqdm
-from text import cleaned_text_to_sequence, get_bert_feature, get_model_name_by_lang
+from .text.cleaner import cleaned_text_to_sequence
 import argparse
 import torch.multiprocessing as mp
 from transformers import AutoTokenizer, AutoModelForMaskedLM
-from .text.symbols import *
 
-
-_symbol_to_id = {s: i for i, s in enumerate(symbols)}
-
-
-def cleaned_text_to_sequence(cleaned_text, tones, language):
-    """Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
-    Args:
-      text: string to convert to a sequence
-    Returns:
-      List of integers corresponding to the symbols in the text
-    """
-    phones = [_symbol_to_id[symbol] for symbol in cleaned_text]
-    tone_start = language_tone_start_map[language]
-    tones = [i + tone_start for i in tones]
-    lang_id = language_id_map[language]
-    lang_ids = [lang_id for i in phones]
-    return phones, tones, lang_ids
 
 name_model_map = {}
 name_tok_map = {}
