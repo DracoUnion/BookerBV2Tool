@@ -2,7 +2,7 @@ import pickle
 import os
 import re
 from g2p_en import G2p
-from transformers import DebertaV2Tokenizer
+from transformers import AutoTokenizer
 
 from . import symbols
 from .symbols import punctuation
@@ -12,7 +12,7 @@ CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")
 CACHE_PATH = os.path.join(current_file_path, "cmudict_cache.pickle")
 _g2p = G2p()
 LOCAL_PATH = "./bert/deberta-v3-large"
-tokenizer = DebertaV2Tokenizer.from_pretrained(LOCAL_PATH)
+
 
 arpa = {
     "AH0",
@@ -391,7 +391,8 @@ def sep_text(text):
     return words
 
 
-def text_to_words(text):
+def text_to_words(model_name, text):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokens = tokenizer.tokenize(text)
     words = []
     for idx, t in enumerate(tokens):
@@ -418,13 +419,13 @@ def text_to_words(text):
     return words
 
 
-def g2p(text):
+def g2p(model_name, text):
     phones = []
     tones = []
     phone_len = []
     # words = sep_text(text)
     # tokens = [tokenizer.tokenize(i) for i in words]
-    words = text_to_words(text)
+    words = text_to_words(model_name, text)
 
     for word in words:
         temp_phones, temp_tones = [], []

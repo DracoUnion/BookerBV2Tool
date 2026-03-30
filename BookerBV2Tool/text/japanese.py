@@ -631,7 +631,6 @@ def handle_long(sep_phonemes):
     return sep_phonemes
 
 
-tokenizer = AutoTokenizer.from_pretrained("./bert/deberta-v2-large-japanese-char-wwm")
 
 
 def align_tones(phones, tones):
@@ -676,7 +675,8 @@ def rearrange_tones(tones, phones):
     return res
 
 
-def g2p(norm_text):
+def g2p(model_name, norm_text):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     sep_text, sep_kata, acc = text2sep_kata(norm_text)
     sep_tokenized = []
     for i in sep_text:
@@ -708,6 +708,7 @@ def g2p(norm_text):
 
 
 if __name__ == "__main__":
+    # tokenizer = AutoTokenizer.from_pretrained("./bert/deberta-v2-large-japanese-char-wwm")
     tokenizer = AutoTokenizer.from_pretrained("./bert/deberta-v2-large-japanese")
     text = "hello,こんにちは、世界ー！……"
     from text.japanese_bert import get_bert_feature

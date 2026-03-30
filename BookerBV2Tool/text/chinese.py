@@ -69,7 +69,7 @@ def replace_punctuation(text):
     return replaced_text
 
 
-def g2p(text):
+def g2p(model_name, text):
     pattern = r"(?<=[{0}])\s*".format("".join(punctuation))
     sentences = [i for i in re.split(pattern, text) if i.strip() != ""]
     phones, tones, word2ph = _g2p(sentences)
@@ -176,11 +176,6 @@ def text_normalize(text):
     text = replace_punctuation(text)
     return text
 
-
-def get_bert_feature(text, word2ph):
-    from text import chinese_bert
-
-    return chinese_bert.get_bert_feature(text, word2ph)
 
 
 if __name__ == "__main__":
