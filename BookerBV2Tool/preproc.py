@@ -37,8 +37,7 @@ def preprocess_handle(args):
                 get_model_name_by_lang(language, args),
                 text, language
             )
-            cleaned.append("{}|{}|{}|{}|{}|{}|{}"
-                .format(
+            cleaned.append((
                     utt,
                     spk,
                     language,
@@ -48,12 +47,12 @@ def preprocess_handle(args):
                     " ".join([str(i) for i in word2ph]),
                 ))
         with open(cleaned_path, "w", encoding="utf-8") as of:
-            of.write('\n'.join(cleaned))
+            of.write('\n'.join("{}|{}|{}|{}|{}|{}|{}".format(*cleaned)))
     else:
         with open(cleaned_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         # utt, spk, language, text, phones, tones, word2ph
-        cleaned = [line.strip().split("|") for l in lines]
+        cleaned = [l.strip().split("|") for l in lines]
 
     transcription_path = cleaned_path
     spk_utt_map = defaultdict(list)
@@ -62,7 +61,9 @@ def preprocess_handle(args):
     audioPaths = set()
     countSame = 0
     countNotFound = 0
+    print(cleaned)
     for utt, spk, language, text, phones, tones, word2ph in cleaned:
+        line = "{}|{}|{}|{}|{}|{}|{}".format(*cleaned)
         if utt in audioPaths:
             # 过滤数据集错误：相同的音频匹配多个文本，导致后续bert出问题
             print(f"重复音频文本：{line}")
