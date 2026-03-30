@@ -8,3 +8,4 @@ pyopenjtalk
 jaconv
 jieba
 cn2an
+g2p_en
