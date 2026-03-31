@@ -49,7 +49,7 @@ def preprocess_handle(args):
             cleaned = json.loads(f.read())
 
     transcription_path = cleaned_path
-    role_file_map = defaultdict(list)
+    role_line_map = defaultdict(list)
     role_id_map = {}
     current_sid = 0
     audioPaths = set()
@@ -68,7 +68,7 @@ def preprocess_handle(args):
             countNotFound += 1
             continue
         audioPaths.add(line['file'])
-        role_file_map[line['role']].append(line['file'])
+        role_line_map[line['role']].append(line)
         if line['role'] not in role_id_map.keys():
             role_id_map[line['role']] = current_sid
             current_sid += 1
@@ -77,7 +77,7 @@ def preprocess_handle(args):
     train_list = []
     val_list = []
 
-    for role, files in role_file_map.items():
+    for role, files in role_line_map.items():
         shuffle(files)
         val_list += files[:val_per_lang]
         train_list += files[val_per_lang:]

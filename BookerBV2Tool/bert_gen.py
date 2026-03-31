@@ -17,6 +17,7 @@ def process_line_safe(line, add_blank):
         traceback.print_exc()
 
 def process_line(line, add_blank):
+    print(line)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     phone, tone, lang = cleaned_text_to_sequence(line['phones'], line['tones'], line['lang'])
     word2ph = line['word2ph']
@@ -56,7 +57,7 @@ def bert_gen_handle(args):
 
     pool = ProcessPoolExecutor(args.num_processes)
     hdls = []
-    for line in tqdm(lines):
+    for line in lines:
         h = pool.submit(process_line_safe, line, add_blank)
         hdls.append(h)
         if len(hdls) > args.num_processes:
