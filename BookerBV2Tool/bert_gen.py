@@ -49,8 +49,10 @@ def bert_gen_handle(args):
         return
 
     pool = Pool(processes=args.num_processes)
+    # hdls = []
     for line in tqdm(lines):
-        pool.apply(process_line, (line, add_blank))
+        h = pool.apply_async(process_line, (line, add_blank))
+        # hdls.append(h)
     pool.join()
 
     print(f"bert生成完毕!, 共有{len(lines)}个bert.pt生成!")
