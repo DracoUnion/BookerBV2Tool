@@ -56,21 +56,21 @@ def preprocess_handle(args):
     countSame = 0
     countNotFound = 0
     print(cleaned)
-    for it in cleaned:
-        if it['file'] in audioPaths:
+    for line in cleaned:
+        if line['file'] in audioPaths:
             # 过滤数据集错误：相同的音频匹配多个文本，导致后续bert出问题
-            print(f"重复音频文本：{it['file']}")
+            print(f"重复音频文本：{line['file']}")
             countSame += 1
             continue
-        if not path.isfile(it['file']):
+        if not path.isfile(line['file']):
             # 过滤数据集错误：不存在对应音频
-            print(f"没有找到对应的音频：{it['file']}")
+            print(f"没有找到对应的音频：{line['file']}")
             countNotFound += 1
             continue
-        audioPaths.add(it['file'])
-        role_file_map[it['role']].append(it['file'])
+        audioPaths.add(line['file'])
+        role_file_map[line['role']].append(line['file'])
         if role not in role_id_map.keys():
-            role_id_map[it['role']] = current_sid
+            role_id_map[line['role']] = current_sid
             current_sid += 1
     print(f"总重复音频数：{countSame}，总未找到的音频数:{countNotFound}")
 
