@@ -37,7 +37,7 @@ def preprocess_handle(args):
                 line['sub'], line['lang'],
             )
             cleaned.append(line | {
-                'norm_sub': norm_sub,
+                'sub': norm_sub,
                 "phones": phones,
                 "tones": tones,
                 "word2ph": word2ph,
