@@ -19,14 +19,14 @@ def process_line_safe(line, add_blank, args):
 def process_line(line, add_blank, args):
     print(line)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    phone, tone, lang = cleaned_text_to_sequence(line['phones'], line['tones'], line['lang'])
+    phone, tone, lang_ids = cleaned_text_to_sequence(line['phones'], line['tones'], line['lang'])
     word2ph = line['word2ph']
     file = line['file']
     sub = line['sub']
     if add_blank:
         phone = commons.intersperse(phone, 0)
         tone = commons.intersperse(tone, 0)
-        lang = commons.intersperse(lang, 0)
+        lang_ids = commons.intersperse(lang_ids, 0)
         for i in range(len(word2ph)):
             word2ph[i] = word2ph[i] * 2
         word2ph[0] += 1
