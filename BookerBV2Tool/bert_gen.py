@@ -34,8 +34,8 @@ def process_line(line, add_blank, args):
     bert_vec_path = file.lower().replace(".wav", "_bert.pt")
     if not path.isfile(bert_vec_path):
         bert = get_bert_feature(
-            get_model_name_by_lang(lang, args),
-            sub, word2ph, lang, device,
+            get_model_name_by_lang(line['lang'], args),
+            sub, word2ph, device,
         )
         assert bert.shape[-1] == len(phone)
         torch.save(bert, bert_vec_path)
