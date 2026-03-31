@@ -37,7 +37,8 @@ def get_bert_feature(
         for i in inputs:
             inputs[i] = inputs[i].to(device)
         res = model(**inputs, output_hidden_states=True)
-        res = torch.cat(res["hidden_states"][-3:-2], -1)[0].cpu()
+        # layer, batch, seq, dim
+        res = res["hidden_states"][-3][0].cpu()
         if style_text:
             style_inputs = tokenizer(style_text, return_tensors="pt")
             for i in style_inputs:
