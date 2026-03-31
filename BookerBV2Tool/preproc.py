@@ -22,7 +22,7 @@ def preprocess_handle(args):
     val_per_lang = args.val_per_lang
     max_val_total = args.max_val_total
 
-    cleaned_path = transcription_path + ".cleaned"
+    cleaned_path = transcription_path[:-5] + "_cleaned.json"
 
     if not path.isfile(cleaned_path):
         with open(transcription_path, "r", encoding="utf-8") as trans_file:
