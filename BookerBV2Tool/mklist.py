@@ -1,3 +1,4 @@
+import json
 from os import path
 import os
 
@@ -20,12 +21,17 @@ def mklist_handle(args):
         if not sub:
             print(f'{sub_fname} 为空')
             continue
-        res.append(f'{f}|{args.role}|{args.lang}|{sub}')
+        res.append({
+            'file': f,
+            'role': args.role,
+            'lang': args.lang,
+            'sub': sub,
+        })
 
     if not res:
         print('未找到任何标注数据')
         return
-    res = '\n'.join(res)
-    ofname = path.join(args.dir, 'speaker.list')
+    ofname = path.join(args.dir, 'speaker_list.json')
     print(ofname)
-    open(ofname, 'w', encoding='utf8').write(res)
+    open(ofname, 'w', encoding='utf8') \
+        .write(json.dumps(res))
