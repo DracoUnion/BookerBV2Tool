@@ -21,7 +21,7 @@ def process_line(line, add_blank, args):
     phone, tone, lang_ids = cleaned_text_to_sequence(line['phones'], line['tones'], line['lang'])
     word2ph = line['word2ph']
     file = line['file']
-    sub = line['sub']
+    sub = line['norm_sub']
     if add_blank:
         phone = commons.intersperse(phone, 0)
         tone = commons.intersperse(tone, 0)
