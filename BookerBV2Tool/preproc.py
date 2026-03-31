@@ -69,7 +69,7 @@ def preprocess_handle(args):
             continue
         audioPaths.add(line['file'])
         role_file_map[line['role']].append(line['file'])
-        if role not in role_id_map.keys():
+        if line['role'] not in role_id_map.keys():
             role_id_map[line['role']] = current_sid
             current_sid += 1
     print(f"总重复音频数：{countSame}，总未找到的音频数:{countNotFound}")
