@@ -17,7 +17,6 @@ def process_line_safe(line, add_blank, args):
         traceback.print_exc()
 
 def process_line(line, add_blank, args):
-    print(line)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     phone, tone, lang_ids = cleaned_text_to_sequence(line['phones'], line['tones'], line['lang'])
     word2ph = line['word2ph']
