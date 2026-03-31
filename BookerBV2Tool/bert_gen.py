@@ -10,9 +10,9 @@ from .text.cleaner import cleaned_text_to_sequence, get_bert_feature, get_model_
 import argparse
 import torch.multiprocessing as mp
 
-def process_line_safe(line, add_blank):
+def process_line_safe(line, add_blank, args):
     try:
-        process_line(line, add_blank)
+        process_line(line, add_blank, args)
     except:
         traceback.print_exc()
 
