@@ -1,6 +1,6 @@
 import json
 import torch
-from multiprocessing import Pool
+from concurrent.futures import ProcessPoolExecutor
 from . import commons
 from os import path
 from . import utils
@@ -48,12 +48,16 @@ def bert_gen_handle(args):
         print(f'未找到训练或测试文件')
         return
 
-    pool = Pool(processes=args.num_processes)
-    # hdls = []
+    pool = ProcessPoolExecutor(processes=args.num_processes)
+    hdls = []
     for line in tqdm(lines):
-        h = pool.apply_async(process_line, (line, add_blank))
-        # hdls.append(h)
-    pool.join()
+        h = pool.submit(process_line, line, add_blank)
+        hdls.append(h)
+        if len(hdls) > args.num_processes:
+            for h in hdls: h.result()
+            hdls = []
+    for h in hdls: 
+        h.result()
 
     print(f"bert生成完毕!, 共有{len(lines)}个bert.pt生成!")
 
