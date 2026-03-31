@@ -48,7 +48,7 @@ def bert_gen_handle(args):
         print(f'未找到训练或测试文件')
         return
 
-    pool = ProcessPoolExecutor(processes=args.num_processes)
+    pool = ProcessPoolExecutor(args.num_processes)
     hdls = []
     for line in tqdm(lines):
         h = pool.submit(process_line, line, add_blank)
