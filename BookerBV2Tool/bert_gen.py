@@ -1,3 +1,4 @@
+import traceback
 import json
 import torch
 from concurrent.futures import ProcessPoolExecutor
@@ -9,6 +10,11 @@ from .text.cleaner import cleaned_text_to_sequence, get_bert_feature, get_model_
 import argparse
 import torch.multiprocessing as mp
 
+def process_line_safe(line, add_blank):
+    try:
+        process_line(line, add_blank)
+    except:
+        traceback.print_exc()
 
 def process_line(line, add_blank):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -51,7 +57,7 @@ def bert_gen_handle(args):
     pool = ProcessPoolExecutor(args.num_processes)
     hdls = []
     for line in tqdm(lines):
-        h = pool.submit(process_line, line, add_blank)
+        h = pool.submit(process_line_safe, line, add_blank)
         hdls.append(h)
         if len(hdls) > args.num_processes:
             for h in hdls: h.result()
