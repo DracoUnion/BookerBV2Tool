@@ -34,4 +34,4 @@ def mklist_handle(args):
     ofname = path.join(args.dir, 'speaker_list.json')
     print(ofname)
     open(ofname, 'w', encoding='utf8') \
-        .write(json.dumps(res))
+        .write(json.dumps(res, ensure_ascii=False))
