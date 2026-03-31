@@ -26,73 +26,61 @@ def preprocess_handle(args):
 
     if not path.isfile(cleaned_path):
         with open(transcription_path, "r", encoding="utf-8") as trans_file:
-            lines = trans_file.readlines()
-        if lines == 0:
+            lines = json.loads(trans_file.read())
+        if len(lines) == 0:
             print(f'{transcription_path} 为空')
             return
         cleaned = []
         for line in lines:
-            utt, spk, language, text = line.strip().split("|")
-            norm_text, phones, tones, word2ph = clean_text(
-                get_model_name_by_lang(language, args),
-                text, language
+            norm_sub, phones, tones, word2ph = clean_text(
+                get_model_name_by_lang(line['lang'], args),
+                line['sub'], line['lang'],
             )
-            cleaned.append((
-                    utt,
-                    spk,
-                    language,
-                    norm_text,
-                    " ".join(phones),
-                    " ".join([str(i) for i in tones]),
-                    " ".join([str(i) for i in word2ph]),
-                ))
+            cleaned.append(line | {
+                'norm_sub': norm_sub,
+                "phones": phones,
+                "tones": tones,
+                "word2ph": word2ph,
+            })
         with open(cleaned_path, "w", encoding="utf-8") as of:
-            of.write(
-                '\n'.join(
-                        "{}|{}|{}|{}|{}|{}|{}".format(c)
-                        for c in cleaned
-                    )
-                )
+            of.write(json.dumps(cleaned, ensure_ascii=False))
     else:
         with open(cleaned_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        # utt, spk, language, text, phones, tones, word2ph
-        cleaned = [l.strip().split("|") for l in lines]
+            cleaned = json.loads(f.read())
 
     transcription_path = cleaned_path
-    spk_utt_map = defaultdict(list)
-    spk_id_map = {}
+    role_file_map = defaultdict(list)
+    role_id_map = {}
     current_sid = 0
     audioPaths = set()
     countSame = 0
     countNotFound = 0
     print(cleaned)
-    for utt, spk, language, text, phones, tones, word2ph in cleaned:
-        line = "{}|{}|{}|{}|{}|{}|{}".format(utt, spk, language, text, phones, tones, word2ph)
-        if utt in audioPaths:
+    for it in cleaned:
+        if it['file'] in audioPaths:
             # 过滤数据集错误：相同的音频匹配多个文本，导致后续bert出问题
-            print(f"重复音频文本：{line}")
+            print(f"重复音频文本：{it['file']}")
             countSame += 1
             continue
-        if not path.isfile(utt):
+        if not path.isfile(it['file']):
             # 过滤数据集错误：不存在对应音频
-            print(f"没有找到对应的音频：{utt}")
+            print(f"没有找到对应的音频：{it['file']}")
             countNotFound += 1
             continue
-        audioPaths.add(utt)
-        spk_utt_map[language].append(line)
-        if spk not in spk_id_map.keys():
-            spk_id_map[spk] = current_sid
+        audioPaths.add(it['file'])
+        role_file_map[it['role']].append(it['file'])
+        if role not in role_id_map.keys():
+            role_id_map[it['role']] = current_sid
             current_sid += 1
     print(f"总重复音频数：{countSame}，总未找到的音频数:{countNotFound}")
 
     train_list = []
     val_list = []
 
-    for spk, utts in spk_utt_map.items():
-        shuffle(utts)
-        val_list += utts[:val_per_lang]
-        train_list += utts[val_per_lang:]
+    for role, files in role_file_map.items():
+        shuffle(files)
+        val_list += files[:val_per_lang]
+        train_list += files[val_per_lang:]
 
     shuffle(val_list)
     if len(val_list) > max_val_total:
@@ -100,16 +88,14 @@ def preprocess_handle(args):
         val_list = val_list[:max_val_total]
 
     with open(train_path, "w", encoding="utf-8") as f:
-        for line in train_list:
-            f.write(line)
+        f.write(json.dumps(train_list, ensure_ascii=False))
 
     with open(val_path, "w", encoding="utf-8") as f:
-        for line in val_list:
-            f.write(line)
+        f.write(json.dumps(val_list, ensure_ascii=False))
 
     json_config = json.load(open(RAW_CONFIG_PATH, encoding="utf-8"))
-    json_config["data"]["spk2id"] = spk_id_map
-    json_config["data"]["n_speakers"] = len(spk_id_map)
+    json_config["data"]["spk2id"] = role_id_map
+    json_config["data"]["n_speakers"] = len(role_id_map)
     # 新增写入：写入训练版本、数据集路径
     json_config["version"] = '2.3'
     json_config["data"]["training_files"] = path.normpath(train_path).replace(

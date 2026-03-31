@@ -53,8 +53,8 @@ def main():
 
     preproc_parser = subparsers.add_parser("preproc", help="preproccess speaker list")
     preproc_parser.add_argument('transcription_path', type=str, help='transcription path')
-    preproc_parser.add_argument('-tp', "--train-path", default='train.list', type=str, help='train path')
-    preproc_parser.add_argument('-vp', "--val-path", default='val.list', type=str, help='val path')
+    preproc_parser.add_argument('-tp', "--train-path", default='train_list.json', type=str, help='train path')
+    preproc_parser.add_argument('-vp', "--val-path", default='val_list.json', type=str, help='val path')
     preproc_parser.add_argument('-cp', "--config-path", default='config.json', type=str, help='config path')
     preproc_parser.add_argument('-vl', '--val-per-lang', type=int,default=4, help='val per lang')
     preproc_parser.add_argument('-mv', '--max-val-total', type=int,default=12, help='max val total')
