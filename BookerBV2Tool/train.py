@@ -16,7 +16,7 @@ import argparse
 import datetime
 
 logging.getLogger("numba").setLevel(logging.WARNING)
-import .commons
+from . import commons
 import utils
 from .data_utils import (
     TextAudioSpeakerLoader,
@@ -37,7 +37,7 @@ from .losses import (
     WavLMLoss,
 )
 from .mel_processing import mel_spectrogram_torch, spec_to_mel_torch
-from text.symbols import symbols
+from .text.symbols import symbols
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = (
