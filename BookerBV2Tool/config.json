@@ -953,5 +953,109 @@
           "initial_channel": 64
       }
     },
-    "version": "2.3"
+    "version": "2.3",
+    "dataset_path": "Data/",
+    "mirror": "",
+    "openi_token": "",
+    "resample": {
+      "sampling_rate": 44100,
+      "in_dir": "audios/raw",
+      "out_dir": "audios/wavs"
+    },
+    "preprocess_text": {
+      "transcription_path": "filelists/你的数据集文本.list",
+      "cleaned_path": "",
+      "train_path": "filelists/train.list",
+      "val_path": "filelists/val.list",
+      "config_path": "config.json",
+      "val_per_lang": 4,
+      "max_val_total": 12,
+      "clean": true
+    },
+    "bert_gen": {
+      "config_path": "config.json",
+      "num_processes": 4,
+      "device": "cuda",
+      "use_multi_device": false
+    },
+    "emo_gen": {
+      "config_path": "config.json",
+      "num_processes": 4,
+      "device": "cuda",
+      "use_multi_device": false
+    },
+    "train_ms": {
+      "env": {
+          "MASTER_ADDR": "localhost",
+          "MASTER_PORT": 10086,
+          "WORLD_SIZE": 1,
+          "LOCAL_RANK": 0,
+          "RANK": 0
+      },
+      "base": {
+          "use_base_model": false,
+          "repo_id": "Stardust_minus/Bert-VITS2",
+          "model_image": "Bert-VITS2_2.3底模"
+      },
+      "model": "models",
+      "config_path": "configs/config.json",
+      "num_workers": 16,
+      "spec_cache": false,
+      "keep_ckpts": 8
+    },
+    "webui": {
+      "device": "cuda",
+      "model": "models/G_8000.pth",
+      "config_path": "configs/config.json",
+      "port": 7860,
+      "share": false,
+      "debug": false,
+      "language_identification_library": "langid"
+    },
+    "server": {
+      "port": 5000,
+      "device": "cuda",
+      "models": [
+          {
+            "model": "",
+            "config": "",
+            "device": "cuda",
+            "language": "ZH",
+            "speakers": [
+                {
+                  "speaker": "科比",
+                  "sdp_ratio": 0.2,
+                  "noise_scale": 0.6,
+                  "noise_scale_w": 0.8,
+                  "length_scale": 1
+                },
+                {
+                  "speaker": "五条悟",
+                  "sdp_ratio": 0.3,
+                  "noise_scale": 0.7,
+                  "noise_scale_w": 0.8,
+                  "length_scale": 0.5
+                },
+                {
+                  "speaker": "安倍晋三",
+                  "sdp_ratio": 0.2,
+                  "noise_scale": 0.6,
+                  "noise_scale_w": 0.8,
+                  "length_scale": 1.2
+                }
+            ]
+          },
+          {
+            "model": "",
+            "config": "",
+            "device": "cpu",
+            "language": "JP",
+            "speakers": []
+          }
+      ]
+    },
+    "translate": {
+      "app_key": "",
+      "secret_key": ""
+    }
   }

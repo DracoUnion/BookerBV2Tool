@@ -8,6 +8,7 @@ from .mark import mark_handle
 from .mklist import mklist_handle
 from .preproc import preprocess_handle
 from .bert_gen import bert_gen_handle
+from .train import train_handle
 
 def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -68,6 +69,17 @@ def main():
         "--num_processes", type=int, default=8
     )
     bert_gen_parser.set_defaults(func=bert_gen_handle)
+
+    train_parser = subparsers.add_parser("train", help="trains model")
+    # 非必要不建议使用命令行配置，请使用config.yml文件
+    train_parser.add_argument(
+        "-c",
+        "--config",
+        type=str,
+        default='config.json',
+        help="JSON file for configuration",
+    )
+    train_parser.set_defaults(func=train_handle)
 
     args = parser.parse_args()
     args.func(args)
