@@ -234,9 +234,9 @@ def train_handle(args):
     if config['train_ms']['base']["use_base_model"]:
         utils.download_checkpoint(
             model_dir,
-            config.train_ms_config.base,
-            token=config.openi_token,
-            mirror=config.mirror,
+            config['train_ms']['base'],
+            token=config['openi_token'],
+            mirror=config['mirror'],
         )
     dur_resume_lr = config['train']['learning_rate']
     wd_resume_lr = config['train']['learning_rate']
@@ -696,7 +696,7 @@ def train_and_evaluate(
                         epoch,
                         os.path.join(config['train_ms']['model_dir'], "DUR_{}.pth".format(global_step)),
                     )
-                keep_ckpts = config.train_ms_config.keep_ckpts
+                keep_ckpts = config['train_ms']['keep_ckpts']
                 if keep_ckpts > 0:
                     utils.clean_checkpoints(
                         path_to_models=config['train_ms']['model_dir'],
