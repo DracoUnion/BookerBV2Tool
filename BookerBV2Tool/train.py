@@ -140,8 +140,8 @@ def train_handle(args):
         mas_noise_scale_initial = 0.0
         noise_scale_delta = 0.0
     if (
-        "use_duration_discriminator" in hps.model.keys()
-        and hps.model.use_duration_discriminator is True
+        "use_duration_discriminator" in config['model']['keys']()
+        and config['model']['use_duration_discriminator'] is True
     ):
         print("Using duration discriminator for VITS2")
         net_dur_disc = DurationDiscriminator(
@@ -166,57 +166,57 @@ def train_handle(args):
 
     net_g = SynthesizerTrn(
         len(symbols),
-        hps.data.filter_length // 2 + 1,
-        hps.train.segment_size // hps.data.hop_length,
-        n_speakers=hps.data.n_speakers,
+        config['data']['filter_length'] // 2 + 1,
+        config['train']['segment_size'] // config['data']['hop_length'],
+        n_speakers=config['data']['n_speakers'],
         mas_noise_scale_initial=mas_noise_scale_initial,
         noise_scale_delta=noise_scale_delta,
-        **hps.model,
+        **config['model'],
     ).cuda(local_rank)
 
-    if getattr(hps.train, "freeze_ZH_bert", False):
+    if getattr(config['train'], "freeze_ZH_bert", False):
         print("Freezing ZH bert encoder !!!")
         for param in net_g.enc_p.bert_proj.parameters():
             param.requires_grad = False
 
-    if getattr(hps.train, "freeze_EN_bert", False):
+    if getattr(config['train'], "freeze_EN_bert", False):
         print("Freezing EN bert encoder !!!")
         for param in net_g.enc_p.en_bert_proj.parameters():
             param.requires_grad = False
 
-    if getattr(hps.train, "freeze_JP_bert", False):
+    if getattr(config['train'], "freeze_JP_bert", False):
         print("Freezing JP bert encoder !!!")
         for param in net_g.enc_p.ja_bert_proj.parameters():
             param.requires_grad = False
 
-    net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda(local_rank)
+    net_d = MultiPeriodDiscriminator(config['model']['use_spectral_norm']).cuda(local_rank)
     net_wd = WavLMDiscriminator(
-        hps.model.slm.hidden, hps.model.slm.nlayers, hps.model.slm.initial_channel
+        config['model']['slm']['hidden'], config['model']['slm']['nlayers'], config['model']['slm']['initial_channel']
     ).cuda(local_rank)
     optim_g = torch.optim.AdamW(
         filter(lambda p: p.requires_grad, net_g.parameters()),
-        hps.train.learning_rate,
-        betas=hps.train.betas,
-        eps=hps.train.eps,
+        config['train']['learning_rate'],
+        betas=config['train']['betas'],
+        eps=config['train']['eps'],
     )
     optim_d = torch.optim.AdamW(
         net_d.parameters(),
-        hps.train.learning_rate,
-        betas=hps.train.betas,
-        eps=hps.train.eps,
+        config['train']['learning_rate'],
+        betas=config['train']['betas'],
+        eps=config['train']['eps'],
     )
     optim_wd = torch.optim.AdamW(
         net_wd.parameters(),
-        hps.train.learning_rate,
-        betas=hps.train.betas,
-        eps=hps.train.eps,
+        config['train']['learning_rate'],
+        betas=config['train']['betas'],
+        eps=config['train']['eps'],
     )
     if net_dur_disc is not None:
         optim_dur_disc = torch.optim.AdamW(
             net_dur_disc.parameters(),
-            hps.train.learning_rate,
-            betas=hps.train.betas,
-            eps=hps.train.eps,
+            config['train']['learning_rate'],
+            betas=config['train']['betas'],
+            eps=config['train']['eps'],
         )
     else:
         optim_dur_disc = None
@@ -319,22 +319,22 @@ def train_handle(args):
         )
     else:
         scheduler_dur_disc = None
-    scaler = GradScaler(enabled=hps.train.bf16_run)
+    scaler = GradScaler(enabled=config['train']['bf16_run'])
 
     wl = WavLMLoss(
-        hps.model.slm.model,
+        config['model']['slm']['model'],
         net_wd,
-        hps.data.sampling_rate,
-        hps.model.slm.sr,
+        config['data']['sampling_rate'],
+        config['model']['slm']['sr'],
     ).to(local_rank)
 
-    for epoch in range(epoch_str, hps.train.epochs + 1):
+    for epoch in range(epoch_str, config['train']['epochs'] + 1):
         if rank == 0:
             train_and_evaluate(
                 rank,
                 local_rank,
                 epoch,
-                hps,
+                config,
                 [net_g, net_d, net_dur_disc, net_wd, wl],
                 [optim_g, optim_d, optim_dur_disc, optim_wd],
                 [scheduler_g, scheduler_d, scheduler_dur_disc, scheduler_wd],
@@ -368,7 +368,7 @@ def train_and_evaluate(
     rank,
     local_rank,
     epoch,
-    hps,
+    config,
     nets,
     optims,
     schedulers,
@@ -428,7 +428,7 @@ def train_and_evaluate(
         ja_bert = ja_bert.cuda(local_rank, non_blocking=True)
         en_bert = en_bert.cuda(local_rank, non_blocking=True)
 
-        with autocast(enabled=hps.train.bf16_run, dtype=torch.bfloat16):
+        with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
             (
                 y_hat,
                 l_length,
@@ -453,33 +453,33 @@ def train_and_evaluate(
             )
             mel = spec_to_mel_torch(
                 spec,
-                hps.data.filter_length,
-                hps.data.n_mel_channels,
-                hps.data.sampling_rate,
-                hps.data.mel_fmin,
-                hps.data.mel_fmax,
+                config['data']['filter_length'],
+                config['data']['n_mel_channels'],
+                config['data']['sampling_rate'],
+                config['data']['mel_fmin'],
+                config['data']['mel_fmax'],
             )
             y_mel = commons.slice_segments(
-                mel, ids_slice, hps.train.segment_size // hps.data.hop_length
+                mel, ids_slice, config['train']['segment_size'] // config['data']['hop_length']
             )
             y_hat_mel = mel_spectrogram_torch(
                 y_hat.squeeze(1).float(),
-                hps.data.filter_length,
-                hps.data.n_mel_channels,
-                hps.data.sampling_rate,
-                hps.data.hop_length,
-                hps.data.win_length,
-                hps.data.mel_fmin,
-                hps.data.mel_fmax,
+                config['data']['filter_length'],
+                config['data']['n_mel_channels'],
+                config['data']['sampling_rate'],
+                config['data']['hop_length'],
+                config['data']['win_length'],
+                config['data']['mel_fmin'],
+                config['data']['mel_fmax'],
             )
 
             y = commons.slice_segments(
-                y, ids_slice * hps.data.hop_length, hps.train.segment_size
+                y, ids_slice * config['data']['hop_length'], config['train']['segment_size']
             )  # slice
 
             # Discriminator
             y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
-            with autocast(enabled=hps.train.bf16_run, dtype=torch.bfloat16):
+            with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
                 loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(
                     y_d_hat_r, y_d_hat_g
                 )
@@ -501,7 +501,7 @@ def train_and_evaluate(
                 )
                 y_dur_hat_r = y_dur_hat_r + y_dur_hat_r_sdp
                 y_dur_hat_g = y_dur_hat_g + y_dur_hat_g_sdp
-                with autocast(enabled=hps.train.bf16_run, dtype=torch.bfloat16):
+                with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
                     # TODO: I think need to mean using the mask, but for now, just mean all
                     (
                         loss_dur_disc,
@@ -523,12 +523,12 @@ def train_and_evaluate(
         optim_d.zero_grad()
         scaler.scale(loss_disc_all).backward()
         scaler.unscale_(optim_d)
-        if getattr(hps.train, "bf16_run", False):
+        if getattr(config['train'], "bf16_run", False):
             torch.nn.utils.clip_grad_norm_(parameters=net_d.parameters(), max_norm=200)
         grad_norm_d = commons.clip_grad_value_(net_d.parameters(), None)
         scaler.step(optim_d)
 
-        with autocast(enabled=hps.train.bf16_run, dtype=torch.bfloat16):
+        with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
             loss_slm = wl.discriminator(
                 y.detach().squeeze(), y_hat.detach().squeeze()
             ).mean()
@@ -540,17 +540,17 @@ def train_and_evaluate(
         grad_norm_wd = commons.clip_grad_value_(net_wd.parameters(), None)
         scaler.step(optim_wd)
 
-        with autocast(enabled=hps.train.bf16_run, dtype=torch.bfloat16):
+        with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
             # Generator
             y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
             if net_dur_disc is not None:
                 _, y_dur_hat_g = net_dur_disc(hidden_x, x_mask, logw_, logw, g)
                 _, y_dur_hat_g_sdp = net_dur_disc(hidden_x, x_mask, logw_, logw_sdp, g)
                 y_dur_hat_g = y_dur_hat_g + y_dur_hat_g_sdp
-            with autocast(enabled=hps.train.bf16_run, dtype=torch.bfloat16):
+            with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
                 loss_dur = torch.sum(l_length.float())
-                loss_mel = F.l1_loss(y_mel, y_hat_mel) * hps.train.c_mel
-                loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * hps.train.c_kl
+                loss_mel = F.l1_loss(y_mel, y_hat_mel) * config['train']['c_mel']
+                loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * config['train']['c_kl']
 
                 loss_fm = feature_loss(fmap_r, fmap_g)
                 loss_gen, losses_gen = generator_loss(y_d_hat_g)
@@ -573,14 +573,14 @@ def train_and_evaluate(
         optim_g.zero_grad()
         scaler.scale(loss_gen_all).backward()
         scaler.unscale_(optim_g)
-        if getattr(hps.train, "bf16_run", False):
+        if getattr(config['train'], "bf16_run", False):
             torch.nn.utils.clip_grad_norm_(parameters=net_g.parameters(), max_norm=500)
         grad_norm_g = commons.clip_grad_value_(net_g.parameters(), None)
         scaler.step(optim_g)
         scaler.update()
 
         if rank == 0:
-            if global_step % hps.train.log_interval == 0:
+            if global_step % config['train']['log_interval'] == 0:
                 lr = optim_g.param_groups[0]["lr"]
                 losses = [loss_disc, loss_gen, loss_fm, loss_mel, loss_dur, loss_kl]
                 logger.info(
@@ -665,26 +665,26 @@ def train_and_evaluate(
                     scalars=scalar_dict,
                 )
 
-            if global_step % hps.train.eval_interval == 0:
-                evaluate(hps, net_g, eval_loader, writer_eval)
+            if global_step % config['train']['eval_interval'] == 0:
+                evaluate(config, net_g, eval_loader, writer_eval)
                 utils.save_checkpoint(
                     net_g,
                     optim_g,
-                    hps.train.learning_rate,
+                    config['train']['learning_rate'],
                     epoch,
                     os.path.join(model_dir, "G_{}.pth".format(global_step)),
                 )
                 utils.save_checkpoint(
                     net_d,
                     optim_d,
-                    hps.train.learning_rate,
+                    config['train']['learning_rate'],
                     epoch,
                     os.path.join(model_dir, "D_{}.pth".format(global_step)),
                 )
                 utils.save_checkpoint(
                     net_wd,
                     optim_wd,
-                    hps.train.learning_rate,
+                    config['train']['learning_rate'],
                     epoch,
                     os.path.join(model_dir, "WD_{}.pth".format(global_step)),
                 )
@@ -692,7 +692,7 @@ def train_and_evaluate(
                     utils.save_checkpoint(
                         net_dur_disc,
                         optim_dur_disc,
-                        hps.train.learning_rate,
+                        config['train']['learning_rate'],
                         epoch,
                         os.path.join(model_dir, "DUR_{}.pth".format(global_step)),
                     )
@@ -712,7 +712,7 @@ def train_and_evaluate(
         logger.info("====> Epoch: {}".format(epoch))
 
 
-def evaluate(hps, generator, eval_loader, writer_eval):
+def evaluate(config, generator, eval_loader, writer_eval):
     generator.eval()
     image_dict = {}
     audio_dict = {}
@@ -755,25 +755,25 @@ def evaluate(hps, generator, eval_loader, writer_eval):
                     max_len=1000,
                     sdp_ratio=0.0 if not use_sdp else 1.0,
                 )
-                y_hat_lengths = mask.sum([1, 2]).long() * hps.data.hop_length
+                y_hat_lengths = mask.sum([1, 2]).long() * config['data']['hop_length']
 
                 mel = spec_to_mel_torch(
                     spec,
-                    hps.data.filter_length,
-                    hps.data.n_mel_channels,
-                    hps.data.sampling_rate,
-                    hps.data.mel_fmin,
-                    hps.data.mel_fmax,
+                    config['data']['filter_length'],
+                    config['data']['n_mel_channels'],
+                    config['data']['sampling_rate'],
+                    config['data']['mel_fmin'],
+                    config['data']['mel_fmax'],
                 )
                 y_hat_mel = mel_spectrogram_torch(
                     y_hat.squeeze(1).float(),
-                    hps.data.filter_length,
-                    hps.data.n_mel_channels,
-                    hps.data.sampling_rate,
-                    hps.data.hop_length,
-                    hps.data.win_length,
-                    hps.data.mel_fmin,
-                    hps.data.mel_fmax,
+                    config['data']['filter_length'],
+                    config['data']['n_mel_channels'],
+                    config['data']['sampling_rate'],
+                    config['data']['hop_length'],
+                    config['data']['win_length'],
+                    config['data']['mel_fmin'],
+                    config['data']['mel_fmax'],
                 )
                 image_dict.update(
                     {
@@ -803,10 +803,8 @@ def evaluate(hps, generator, eval_loader, writer_eval):
         global_step=global_step,
         images=image_dict,
         audios=audio_dict,
-        audio_sampling_rate=hps.data.sampling_rate,
+        audio_sampling_rate=config['data']['sampling_rate'],
     )
     generator.train()
 
 
-if __name__ == "__main__":
-    run()
