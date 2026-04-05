@@ -243,11 +243,11 @@ def train_handle(args):
     if net_dur_disc is not None:
         try:
             _, _, dur_resume_lr, epoch_str = utils.load_checkpoint(
-                utils.latest_checkpoint_path(hps.model_dir, "DUR_*.pth"),
+                utils.latest_checkpoint_path(model_dir, "DUR_*.pth"),
                 net_dur_disc,
                 optim_dur_disc,
                 skip_optimizer=(
-                    hps.train.skip_optimizer if "skip_optimizer" in hps.train else True
+                    config['train']['skip_optimizer'] if "skip_optimizer" in config['train'] else True
                 ),
             )
             if not optim_dur_disc.param_groups[0].get("initial_lr"):
@@ -257,19 +257,19 @@ def train_handle(args):
 
     try:
         _, optim_g, g_resume_lr, epoch_str = utils.load_checkpoint(
-            utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"),
+            utils.latest_checkpoint_path(model_dir, "G_*.pth"),
             net_g,
             optim_g,
             skip_optimizer=(
-                hps.train.skip_optimizer if "skip_optimizer" in hps.train else True
+                config['train']['skip_optimizer'] if "skip_optimizer" in config['train'] else True
             ),
         )
         _, optim_d, d_resume_lr, epoch_str = utils.load_checkpoint(
-            utils.latest_checkpoint_path(hps.model_dir, "D_*.pth"),
+            utils.latest_checkpoint_path(model_dir, "D_*.pth"),
             net_d,
             optim_d,
             skip_optimizer=(
-                hps.train.skip_optimizer if "skip_optimizer" in hps.train else True
+                 config['train']['skip_optimizer'] if "skip_optimizer" in config['train'] else True
             ),
         )
         if not optim_g.param_groups[0].get("initial_lr"):
@@ -280,7 +280,7 @@ def train_handle(args):
         epoch_str = max(epoch_str, 1)
         # global_step = (epoch_str - 1) * len(train_loader)
         global_step = int(
-            utils.get_steps(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"))
+            utils.get_steps(utils.latest_checkpoint_path(model_dir, "G_*.pth"))
         )
         print(
             f"******************检测到模型存在，epoch为 {epoch_str}，gloabl step为 {global_step}*********************"
@@ -292,11 +292,11 @@ def train_handle(args):
 
     try:
         _, optim_wd, wd_resume_lr, epoch_str = utils.load_checkpoint(
-            utils.latest_checkpoint_path(hps.model_dir, "WD_*.pth"),
+            utils.latest_checkpoint_path(model_dir, "WD_*.pth"),
             net_wd,
             optim_wd,
             skip_optimizer=(
-                hps.train.skip_optimizer if "skip_optimizer" in hps.train else True
+                config['train']['skip_optimizer'] if "skip_optimizer" in config['train'] else True
             ),
         )
         if not optim_wd.param_groups[0].get("initial_lr"):
@@ -305,17 +305,17 @@ def train_handle(args):
         print(e)
 
     scheduler_g = torch.optim.lr_scheduler.ExponentialLR(
-        optim_g, gamma=hps.train.lr_decay, last_epoch=epoch_str - 2
+        optim_g, gamma=config['train']['lr_decay'], last_epoch=epoch_str - 2
     )
     scheduler_d = torch.optim.lr_scheduler.ExponentialLR(
-        optim_d, gamma=hps.train.lr_decay, last_epoch=epoch_str - 2
+        optim_d, gamma=config['train']['lr_decay'], last_epoch=epoch_str - 2
     )
     scheduler_wd = torch.optim.lr_scheduler.ExponentialLR(
-        optim_wd, gamma=hps.train.lr_decay, last_epoch=epoch_str - 2
+        optim_wd, gamma=config['train']['lr_decay'], last_epoch=epoch_str - 2
     )
     if net_dur_disc is not None:
         scheduler_dur_disc = torch.optim.lr_scheduler.ExponentialLR(
-            optim_dur_disc, gamma=hps.train.lr_decay, last_epoch=epoch_str - 2
+            optim_dur_disc, gamma=config['train']['lr_decay'], last_epoch=epoch_str - 2
         )
     else:
         scheduler_dur_disc = None
@@ -348,7 +348,7 @@ def train_handle(args):
                 rank,
                 local_rank,
                 epoch,
-                hps,
+                config,
                 [net_g, net_d, net_dur_disc, net_wd, wl],
                 [optim_g, optim_d, optim_dur_disc, optim_wd],
                 [scheduler_g, scheduler_d, scheduler_dur_disc, scheduler_wd],
@@ -672,21 +672,21 @@ def train_and_evaluate(
                     optim_g,
                     hps.train.learning_rate,
                     epoch,
-                    os.path.join(hps.model_dir, "G_{}.pth".format(global_step)),
+                    os.path.join(model_dir, "G_{}.pth".format(global_step)),
                 )
                 utils.save_checkpoint(
                     net_d,
                     optim_d,
                     hps.train.learning_rate,
                     epoch,
-                    os.path.join(hps.model_dir, "D_{}.pth".format(global_step)),
+                    os.path.join(model_dir, "D_{}.pth".format(global_step)),
                 )
                 utils.save_checkpoint(
                     net_wd,
                     optim_wd,
                     hps.train.learning_rate,
                     epoch,
-                    os.path.join(hps.model_dir, "WD_{}.pth".format(global_step)),
+                    os.path.join(model_dir, "WD_{}.pth".format(global_step)),
                 )
                 if net_dur_disc is not None:
                     utils.save_checkpoint(
@@ -694,12 +694,12 @@ def train_and_evaluate(
                         optim_dur_disc,
                         hps.train.learning_rate,
                         epoch,
-                        os.path.join(hps.model_dir, "DUR_{}.pth".format(global_step)),
+                        os.path.join(model_dir, "DUR_{}.pth".format(global_step)),
                     )
                 keep_ckpts = config.train_ms_config.keep_ckpts
                 if keep_ckpts > 0:
                     utils.clean_checkpoints(
-                        path_to_models=hps.model_dir,
+                        path_to_models=model_dir,
                         n_ckpts_to_keep=keep_ckpts,
                         sort_by_time=True,
                     )
