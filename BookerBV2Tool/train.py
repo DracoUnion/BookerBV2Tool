@@ -84,24 +84,23 @@ def train_handle(args):
     n_gpus = dist.get_world_size()
 
 
-    model_dir = config['train_ms']['model']
-    hps = utils.get_hparams_from_file(args.config)
-    hps.model_dir = model_dir
-
-    torch.manual_seed(hps.train.seed)
+    model_dir = config['train_ms']['model_dir']
+    if not path.isdir(model_dir):
+        os.makedirs(model_dir, exist_ok=True)
+    torch.manual_seed(config['train']['seed'])
     torch.cuda.set_device(local_rank)
 
     global global_step
     if rank == 0:
-        logger = utils.get_logger(hps.model_dir)
-        logger.info(hps)
-        utils.check_git_hash(hps.model_dir)
-        writer = SummaryWriter(log_dir=hps.model_dir)
-        writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
-    train_dataset = TextAudioSpeakerLoader(hps.data.training_files, hps.data)
+        logger = utils.get_logger(model_dir)
+        logger.info(config)
+        utils.check_git_hash(model_dir)
+        writer = SummaryWriter(log_dir=model_dir)
+        writer_eval = SummaryWriter(log_dir=os.path.join(model_dir, "eval"))
+    train_dataset = TextAudioSpeakerLoader(config['data']['training_files'], config['data'])
     train_sampler = DistributedBucketSampler(
         train_dataset,
-        hps.train.batch_size,
+        config['train']['batch_size'],
         [32, 300, 400, 500, 600, 700, 800, 900, 1000],
         num_replicas=n_gpus,
         rank=rank,
@@ -110,7 +109,7 @@ def train_handle(args):
     collate_fn = TextAudioSpeakerCollate()
     train_loader = DataLoader(
         train_dataset,
-        num_workers=min(config.train_ms_config.num_workers, os.cpu_count() - 1),
+        num_workers=min(config['train_ms']['num_workers'], os.cpu_count() - 1),
         shuffle=False,
         pin_memory=True,
         collate_fn=collate_fn,
@@ -119,7 +118,7 @@ def train_handle(args):
         prefetch_factor=4,
     )  # DataLoader config could be adjusted.
     if rank == 0:
-        eval_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps.data)
+        eval_dataset = TextAudioSpeakerLoader(config['data']['validation_files'], config['data'])
         eval_loader = DataLoader(
             eval_dataset,
             num_workers=0,
@@ -130,8 +129,8 @@ def train_handle(args):
             collate_fn=collate_fn,
         )
     if (
-        "use_noise_scaled_mas" in hps.model.keys()
-        and hps.model.use_noise_scaled_mas is True
+        "use_noise_scaled_mas" in config['model'].keys()
+        and config['model']['use_noise_scaled_mas'] is True
     ):
         print("Using noise scaled MAS for VITS2")
         mas_noise_scale_initial = 0.01
@@ -146,19 +145,19 @@ def train_handle(args):
     ):
         print("Using duration discriminator for VITS2")
         net_dur_disc = DurationDiscriminator(
-            hps.model.hidden_channels,
-            hps.model.hidden_channels,
+            config['model']['hidden_channels'],
+            config['model']['hidden_channels'],
             3,
             0.1,
-            gin_channels=hps.model.gin_channels if hps.data.n_speakers != 0 else 0,
+            gin_channels=config['model']['gin_channels'] if config['data']['n_speakers'] != 0 else 0,
         ).cuda(local_rank)
     else:
         net_dur_disc = None
     if (
-        "use_spk_conditioned_encoder" in hps.model.keys()
-        and hps.model.use_spk_conditioned_encoder is True
+        "use_spk_conditioned_encoder" in config['model'].keys()
+        and config['model']['use_spk_conditioned_encoder'] is True
     ):
-        if hps.data.n_speakers == 0:
+        if config['data']['n_speakers'] == 0:
             raise ValueError(
                 "n_speakers must be > 0 when using spk conditioned encoder to train multi-speaker model"
             )
@@ -232,15 +231,15 @@ def train_handle(args):
         )
 
     # 下载底模
-    if config.train_ms_config.base["use_base_model"]:
+    if config['train_ms']['base']["use_base_model"]:
         utils.download_checkpoint(
-            hps.model_dir,
+            model_dir,
             config.train_ms_config.base,
             token=config.openi_token,
             mirror=config.mirror,
         )
-    dur_resume_lr = hps.train.learning_rate
-    wd_resume_lr = hps.train.learning_rate
+    dur_resume_lr = config['train']['learning_rate']
+    wd_resume_lr = config['train']['learning_rate']
     if net_dur_disc is not None:
         try:
             _, _, dur_resume_lr, epoch_str = utils.load_checkpoint(
