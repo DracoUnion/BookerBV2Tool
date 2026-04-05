@@ -672,21 +672,21 @@ def train_and_evaluate(
                     optim_g,
                     config['train']['learning_rate'],
                     epoch,
-                    os.path.join(model_dir, "G_{}.pth".format(global_step)),
+                    os.path.join(config['train_ms']['model_dir'], "G_{}.pth".format(global_step)),
                 )
                 utils.save_checkpoint(
                     net_d,
                     optim_d,
                     config['train']['learning_rate'],
                     epoch,
-                    os.path.join(model_dir, "D_{}.pth".format(global_step)),
+                    os.path.join(config['train_ms']['model_dir'], "D_{}.pth".format(global_step)),
                 )
                 utils.save_checkpoint(
                     net_wd,
                     optim_wd,
                     config['train']['learning_rate'],
                     epoch,
-                    os.path.join(model_dir, "WD_{}.pth".format(global_step)),
+                    os.path.join(config['train_ms']['model_dir'], "WD_{}.pth".format(global_step)),
                 )
                 if net_dur_disc is not None:
                     utils.save_checkpoint(
@@ -694,12 +694,12 @@ def train_and_evaluate(
                         optim_dur_disc,
                         config['train']['learning_rate'],
                         epoch,
-                        os.path.join(model_dir, "DUR_{}.pth".format(global_step)),
+                        os.path.join(config['train_ms']['model_dir'], "DUR_{}.pth".format(global_step)),
                     )
                 keep_ckpts = config.train_ms_config.keep_ckpts
                 if keep_ckpts > 0:
                     utils.clean_checkpoints(
-                        path_to_models=model_dir,
+                        path_to_models=config['train_ms']['model_dir'],
                         n_ckpts_to_keep=keep_ckpts,
                         sort_by_time=True,
                     )
