@@ -19,7 +19,7 @@ import datetime
 # 设置numba的日志级别为WARNING，减少不必要的日志输出
 logging.getLogger("numba").setLevel(logging.WARNING)
 from . import commons
-import utils
+from . import utils
 from .data_utils import (
     TextAudioSpeakerLoader,      # 文本-音频-说话人数据加载器
     TextAudioSpeakerCollate,     # 数据批处理整理函数

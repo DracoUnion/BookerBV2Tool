@@ -8,7 +8,13 @@ from .mark import mark_handle
 from .mklist import mklist_handle
 from .preproc import preprocess_handle
 from .bert_gen import bert_gen_handle
-from .train import train_handle
+
+# train 依赖 tensorboard 与上游 Bert-VITS2 的 modules/attentions/monotonic_align，
+# 这些不在本仓库内，因此按需惰性导入，避免启动其它子命令时被连带拖垮。
+def _train_handle(args):
+    from .train import train_handle
+
+    train_handle(args)
 
 def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -79,7 +85,7 @@ def main():
         default='config.json',
         help="JSON file for configuration",
     )
-    train_parser.set_defaults(func=train_handle)
+    train_parser.set_defaults(func=_train_handle)
 
     args = parser.parse_args()
     args.func(args)
