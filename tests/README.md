@@ -48,12 +48,18 @@ python -m pytest tests/ --cov=BookerBV2Tool
 | `test_sencevoice.py` | `sencevoice.py`（SenseVoice 转写流程，全 mock） |
 | `test_data_utils.py` | `data_utils.py`（数据集、collate、分桶采样器） |
 
-## 未覆盖的模块
+## 覆盖与未覆盖
 
-- **`models.py` / `train.py` / `__main__.py`**：依赖上游 Bert-VITS2 的
-  `modules` / `attentions` / `monotonic_align` 源码，这些文件**不在本仓库内**，
-  无法离线实例化模型，因此跳过。`train.py` 的许多逻辑实际上已在
-  `test_data_utils.py`、`test_utils.py` 中通过其底层组件间接覆盖。
+- **已并入并测试模型库**：本仓库打包时遗漏了上游 Bert-VITS2 的模型源码
+  （`modules.py` / `attentions.py` / `transforms.py` / `monotonic_align/` /
+  `config.py` / `tools/`），已从 `/d/src/Bert-VITS2` 补入并改为包内相对导入，
+  `models.py` 与 `train.py` 现在可以成功导入。`test_models.py` 验证了整条
+  训练链可导入、`SynthesizerTrn` 可构造（条件/无条件说话人编码两条路径）。
+- **`train` 的实际训练**：需要 CUDA 版 torch + GPU + 分布式环境变量 +
+  充足数据。本机是无 GPU 的 CPU torch，`train` 能读取配置、加载环境变量、
+  构建模型，但在 `torch.cuda.set_device` 处因无 GPU 而停止——这是硬件限制，
+  不是代码错误。相关模型/数据层代码已通过 `test_models.py`、`test_data_utils.py`
+  间接覆盖。
 - **`text/*.bert`**：需要下载预训练模型，未测试（`get_bert_feature` 已在
   `test_cleaner.py` / `test_bert_gen.py` 中 mock 覆盖调用流程）。
 

@@ -3,16 +3,16 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-import commons
-import modules
-import attentions
-import monotonic_align
+from . import commons
+from . import modules
+from . import attentions
+from . import monotonic_align
 
 from torch.nn import Conv1d, ConvTranspose1d, Conv2d
 from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
 
-from commons import init_weights, get_padding
-from text import symbols, num_tones, num_languages
+from .commons import init_weights, get_padding
+from .text.symbols import symbols, num_tones, num_languages
 
 
 class DurationDiscriminator(nn.Module):  # vits2
@@ -1239,6 +1239,8 @@ class SynthesizerTrn(nn.Module):
         self.current_mas_noise_scale = self.mas_noise_scale_initial
         if self.use_spk_conditioned_encoder and gin_channels > 0:
             self.enc_gin_channels = gin_channels
+        else:
+            self.enc_gin_channels = 0
 
         # 文本编码器
         self.enc_p = TextEncoder(
