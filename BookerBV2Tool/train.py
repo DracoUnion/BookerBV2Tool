@@ -4,12 +4,11 @@ import json
 import platform
 import os
 from os import path
+from types import SimpleNamespace
 import torch
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
 import logging
@@ -59,6 +58,27 @@ torch.backends.cuda.enable_mem_efficient_sdp(
 global_step = 0
 
 
+def _device():
+    """选择训练设备：有 CUDA 用 GPU，否则回退到 CPU（单机训练）。"""
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+class _NoWavLM:
+    """WavLM/SLM 增强损失的占位实现（本地无 WavLM 模型时使用），各项损失返回 0。"""
+
+    def to(self, device):
+        return self
+
+    def __call__(self, wav, y_rec):
+        return torch.tensor(0.0)
+
+    def generator(self, y_rec):
+        return torch.tensor(0.0)
+
+    def discriminator(self, wav, y_rec):
+        return torch.tensor(0.0)
+
+
 def train_handle(args):
     """
     训练处理函数 - 分布式训练的主入口
@@ -69,37 +89,13 @@ def train_handle(args):
     # 读取配置文件
     config = json.loads(
         open(args.config, encoding='utf8').read())
-    # 环境变量解析 - 从配置中加载环境变量
-    envs = config['train_ms']['env']
-    for env_name, env_value in envs.items():
-        if env_name not in os.environ.keys():
-            print("加载config中的配置{}".format(str(env_value)))
-            os.environ[env_name] = str(env_value)
-    print(
-        "加载环境变量 \nMASTER_ADDR: {},\nMASTER_PORT: {},\nWORLD_SIZE: {},\nRANK: {},\nLOCAL_RANK: {}".format(
-            os.environ["MASTER_ADDR"],
-            os.environ["MASTER_PORT"],
-            os.environ["WORLD_SIZE"],
-            os.environ["RANK"],
-            os.environ["LOCAL_RANK"],
-        )
-    )
 
-    # 根据操作系统选择分布式后端：Windows使用gloo，Linux使用nccl
-    backend = "nccl"
-    if platform.system() == "Windows":
-        backend = "gloo"  # 如果是Windows系统，切换到gloo后端
-    # 初始化进程组 - 使用torchrun替代mp.spawn
-    dist.init_process_group(
-        backend=backend,
-        init_method="env://",
-        timeout=datetime.timedelta(seconds=300),
-    )
-    # 获取当前进程的rank和本地rank
-    rank = dist.get_rank()
-    local_rank = int(os.environ["LOCAL_RANK"])
-    n_gpus = dist.get_world_size()  # 获取GPU总数
-
+    # 单机训练：恒为 rank 0；设备自动选择（有 CUDA 用 GPU，否则 CPU）
+    rank = 0
+    local_rank = 0
+    device = _device()
+    # AMP 仅在启用 bf16 且设备为 GPU 时生效，CPU 上关闭
+    amp_enabled = bool(config['train'].get('bf16_run', False)) and torch.cuda.is_available()
 
     # 创建模型保存目录
     model_dir = config['train_ms']['model_dir']
@@ -107,10 +103,11 @@ def train_handle(args):
         os.makedirs(model_dir, exist_ok=True)
     # 设置随机种子，确保可复现性
     torch.manual_seed(config['train']['seed'])
-    torch.cuda.set_device(local_rank)  # 设置当前进程使用的GPU
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)  # 设置当前进程使用的GPU
 
     global global_step
-    # 只有rank 0的进程才创建日志和TensorBoard写入器
+    # 单机训练下 rank 恒为 0，始终创建日志和TensorBoard写入器
     if rank == 0:
         logger = utils.get_logger(model_dir)
         logger.info(config)
@@ -119,33 +116,36 @@ def train_handle(args):
         writer_eval = SummaryWriter(log_dir=os.path.join(model_dir, "eval"))
 
     # 创建训练数据集
-    train_dataset = TextAudioSpeakerLoader(config['data']['training_files'], config['data'])
+    train_dataset = TextAudioSpeakerLoader(config['data']['training_files'], SimpleNamespace(**config['data']))
     # 创建分布式分桶采样器 - 根据音频长度将数据分桶，提高效率
     train_sampler = DistributedBucketSampler(
         train_dataset,
         config['train']['batch_size'],
         [32, 300, 400, 500, 600, 700, 800, 900, 1000],  # 桶的边界（音频长度）
-        num_replicas=n_gpus,
+        num_replicas=1,
         rank=rank,
         shuffle=True,
     )
     # 创建数据整理函数
     collate_fn = TextAudioSpeakerCollate()
     # 创建训练数据加载器
+    nw = min(config['train_ms']['num_workers'], os.cpu_count() - 1)
+    pers_params = {}
+    if nw > 0:
+        pers_params = {"persistent_workers": True, "prefetch_factor": 4}
     train_loader = DataLoader(
         train_dataset,
-        num_workers=min(config['train_ms']['num_workers'], os.cpu_count() - 1),
+        num_workers=nw,
         shuffle=False,
         pin_memory=True,
         collate_fn=collate_fn,
         batch_sampler=train_sampler,
-        persistent_workers=True,
-        prefetch_factor=4,
+        **pers_params,
     )  # DataLoader配置可以调整
 
     # 只有rank 0的进程才创建评估数据集
     if rank == 0:
-        eval_dataset = TextAudioSpeakerLoader(config['data']['validation_files'], config['data'])
+        eval_dataset = TextAudioSpeakerLoader(config['data']['validation_files'], SimpleNamespace(**config['data']))
         eval_loader = DataLoader(
             eval_dataset,
             num_workers=0,
@@ -171,7 +171,7 @@ def train_handle(args):
 
     # 检查是否使用时长判别器 - VITS2特性
     if (
-        "use_duration_discriminator" in config['model']['keys']()
+        bool(config['model'].get('use_duration_discriminator', False))
         and config['model']['use_duration_discriminator'] is True
     ):
         print("Using duration discriminator for VITS2")
@@ -181,7 +181,7 @@ def train_handle(args):
             3,
             0.1,
             gin_channels=config['model']['gin_channels'] if config['data']['n_speakers'] != 0 else 0,
-        ).cuda(local_rank)
+        ).to(device)
     else:
         net_dur_disc = None
 
@@ -206,7 +206,7 @@ def train_handle(args):
         mas_noise_scale_initial=mas_noise_scale_initial,
         noise_scale_delta=noise_scale_delta,
         **config['model'],
-    ).cuda(local_rank)
+    ).to(device)
 
     # 根据配置冻结BERT编码器（可选）
     if getattr(config['train'], "freeze_ZH_bert", False):
@@ -225,11 +225,11 @@ def train_handle(args):
             param.requires_grad = False
 
     # 创建多周期判别器
-    net_d = MultiPeriodDiscriminator(config['model']['use_spectral_norm']).cuda(local_rank)
+    net_d = MultiPeriodDiscriminator(config['model']['use_spectral_norm']).to(device)
     # 创建WavLM判别器（用于SLM损失）
     net_wd = WavLMDiscriminator(
         config['model']['slm']['hidden'], config['model']['slm']['nlayers'], config['model']['slm']['initial_channel']
-    ).cuda(local_rank)
+    ).to(device)
 
     # 创建优化器
     optim_g = torch.optim.AdamW(
@@ -261,16 +261,7 @@ def train_handle(args):
     else:
         optim_dur_disc = None
 
-    # 包装模型为DistributedDataParallel（DDP）
-    net_g = DDP(net_g, device_ids=[local_rank], bucket_cap_mb=512)
-    net_d = DDP(net_d, device_ids=[local_rank], bucket_cap_mb=512)
-    net_wd = DDP(net_wd, device_ids=[local_rank], bucket_cap_mb=512)
-    if net_dur_disc is not None:
-        net_dur_disc = DDP(
-            net_dur_disc,
-            device_ids=[local_rank],
-            bucket_cap_mb=512,
-        )
+    # 单机训练：模型直接使用，无需 DDP 包装
 
     # 下载底模（预训练模型）
     if config['train_ms']['base']["use_base_model"]:
@@ -370,15 +361,25 @@ def train_handle(args):
         scheduler_dur_disc = None
 
     # 创建梯度缩放器（用于混合精度训练）
-    scaler = GradScaler(enabled=config['train']['bf16_run'])
+    scaler = GradScaler(enabled=amp_enabled)
 
     # 创建WavLM损失对象（SLM损失）
-    wl = WavLMLoss(
-        config['model']['slm']['model'],
-        net_wd,
-        config['data']['sampling_rate'],
-        config['model']['slm']['sr'],
-    ).to(local_rank)
+    slm_model_path = config['model']['slm']['model']
+    if path.isdir(slm_model_path):
+        print(f"Using WavLM SLM loss from {slm_model_path}")
+        wl = WavLMLoss(
+            slm_model_path,
+            net_wd,
+            config['data']['sampling_rate'],
+            config['model']['slm']['sr'],
+        ).to(device)
+    else:
+        # SLM 增强损失需要本地 WavLM 模型；缺失时关闭（退化为 VITS1 风格损失），
+        # 便于在没有该模型时也能在 CPU 上训练。
+        print(
+            f"WavLM SLM model not found at {slm_model_path}; SLM loss disabled."
+        )
+        wl = _NoWavLM()
 
     # 训练循环
     for epoch in range(epoch_str, config['train']['epochs'] + 1):
@@ -451,6 +452,8 @@ def train_and_evaluate(
     optim_g, optim_d, optim_dur_disc, optim_wd = optims
     scheduler_g, scheduler_d, scheduler_dur_disc, scheduler_wd = schedulers
     train_loader, eval_loader = loaders
+    device = _device()
+    amp_enabled = bool(config['train'].get('bf16_run', False)) and torch.cuda.is_available()
     if writers is not None:
         writer, writer_eval = writers
 
@@ -482,32 +485,26 @@ def train_and_evaluate(
     ) in enumerate(tqdm(train_loader)):
 
         # 更新噪声缩放的MAS（如果启用）
-        if net_g.module.use_noise_scaled_mas:
+        if net_g.use_noise_scaled_mas:
             current_mas_noise_scale = (
-                net_g.module.mas_noise_scale_initial
-                - net_g.module.noise_scale_delta * global_step
+                net_g.mas_noise_scale_initial
+                - net_g.noise_scale_delta * global_step
             )
-            net_g.module.current_mas_noise_scale = max(current_mas_noise_scale, 0.0)
+            net_g.current_mas_noise_scale = max(current_mas_noise_scale, 0.0)
 
-        # 将数据移动到GPU
-        x, x_lengths = x.cuda(local_rank, non_blocking=True), x_lengths.cuda(
-            local_rank, non_blocking=True
-        )
-        spec, spec_lengths = spec.cuda(
-            local_rank, non_blocking=True
-        ), spec_lengths.cuda(local_rank, non_blocking=True)
-        y, y_lengths = y.cuda(local_rank, non_blocking=True), y_lengths.cuda(
-            local_rank, non_blocking=True
-        )
-        speakers = speakers.cuda(local_rank, non_blocking=True)
-        tone = tone.cuda(local_rank, non_blocking=True)
-        language = language.cuda(local_rank, non_blocking=True)
-        bert = bert.cuda(local_rank, non_blocking=True)
-        ja_bert = ja_bert.cuda(local_rank, non_blocking=True)
-        en_bert = en_bert.cuda(local_rank, non_blocking=True)
+        # 将数据移动到设备（CPU/GPU）
+        x, x_lengths = x.to(device), x_lengths.to(device)
+        spec, spec_lengths = spec.to(device), spec_lengths.to(device)
+        y, y_lengths = y.to(device), y_lengths.to(device)
+        speakers = speakers.to(device)
+        tone = tone.to(device)
+        language = language.to(device)
+        bert = bert.to(device)
+        ja_bert = ja_bert.to(device)
+        en_bert = en_bert.to(device)
 
         # 使用自动混合精度（AMP）进行前向传播
-        with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
+        with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
             # 生成器前向传播
             (
                 y_hat,          # 生成的音频
@@ -565,7 +562,7 @@ def train_and_evaluate(
             # ==================== 判别器训练 ====================
             # 多周期判别器前向传播（使用detach阻止梯度流向生成器）
             y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
-            with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
+            with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
                 loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(
                     y_d_hat_r, y_d_hat_g
                 )
@@ -589,7 +586,7 @@ def train_and_evaluate(
                 )
                 y_dur_hat_r = y_dur_hat_r + y_dur_hat_r_sdp
                 y_dur_hat_g = y_dur_hat_g + y_dur_hat_g_sdp
-                with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
+                with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
                     (
                         loss_dur_disc,
                         losses_dur_disc_r,
@@ -616,19 +613,24 @@ def train_and_evaluate(
         scaler.step(optim_d)
 
         # WavLM判别器（SLM判别器）训练
-        with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
-            loss_slm = wl.discriminator(
-                y.detach().squeeze(), y_hat.detach().squeeze()
-            ).mean()
+        if isinstance(wl, _NoWavLM):
+            # SLM 关闭时跳过该判别器的反向传播（无梯度的 0 损失无法 backward）
+            loss_slm = torch.tensor(0.0, device=device)
+            grad_norm_wd = 0.0
+        else:
+            with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
+                loss_slm = wl.discriminator(
+                    y.detach().squeeze(), y_hat.detach().squeeze()
+                ).mean()
 
-        optim_wd.zero_grad()
-        scaler.scale(loss_slm).backward()
-        scaler.unscale_(optim_wd)
-        grad_norm_wd = commons.clip_grad_value_(net_wd.parameters(), None)
-        scaler.step(optim_wd)
+            optim_wd.zero_grad()
+            scaler.scale(loss_slm).backward()
+            scaler.unscale_(optim_wd)
+            grad_norm_wd = commons.clip_grad_value_(net_wd.parameters(), None)
+            scaler.step(optim_wd)
 
         # ==================== 生成器训练 ====================
-        with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
+        with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
             # 多周期判别器前向传播（不detach，允许梯度流向生成器）
             y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
             if net_dur_disc is not None:
@@ -636,7 +638,7 @@ def train_and_evaluate(
                 _, y_dur_hat_g_sdp = net_dur_disc(hidden_x, x_mask, logw_, logw_sdp, g)
                 y_dur_hat_g = y_dur_hat_g + y_dur_hat_g_sdp
 
-            with autocast(enabled=config['train']['bf16_run'], dtype=torch.bfloat16):
+            with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
                 # 计算各项损失
                 loss_dur = torch.sum(l_length.float())  # 时长损失
                 loss_mel = F.l1_loss(y_mel, y_hat_mel) * config['train']['c_mel']  # 梅尔频谱图损失
@@ -693,7 +695,7 @@ def train_and_evaluate(
                     "learning_rate": lr,
                     "grad_norm_d": grad_norm_d,
                     "grad_norm_g": grad_norm_g,
-                    "grad_norm_dur": grad_norm_dur,
+                    "grad_norm_dur": grad_norm_dur if net_dur_disc is not None else 0.0,
                     "grad_norm_wd": grad_norm_wd,
                 }
                 scalar_dict.update(
@@ -824,6 +826,7 @@ def evaluate(config, generator, eval_loader, writer_eval):
         writer_eval: 评估用的TensorBoard写入器
     """
     generator.eval()  # 设置模型为评估模式
+    device = _device()
     image_dict = {}
     audio_dict = {}
     print("Evaluating ...")
@@ -843,19 +846,19 @@ def evaluate(config, generator, eval_loader, writer_eval):
             en_bert,
         ) in enumerate(eval_loader):
             # 将数据移动到GPU
-            x, x_lengths = x.cuda(), x_lengths.cuda()
-            spec, spec_lengths = spec.cuda(), spec_lengths.cuda()
-            y, y_lengths = y.cuda(), y_lengths.cuda()
-            speakers = speakers.cuda()
-            bert = bert.cuda()
-            ja_bert = ja_bert.cuda()
-            en_bert = en_bert.cuda()
-            tone = tone.cuda()
-            language = language.cuda()
+            x, x_lengths = x.to(device), x_lengths.to(device)
+            spec, spec_lengths = spec.to(device), spec_lengths.to(device)
+            y, y_lengths = y.to(device), y_lengths.to(device)
+            speakers = speakers.to(device)
+            bert = bert.to(device)
+            ja_bert = ja_bert.to(device)
+            en_bert = en_bert.to(device)
+            tone = tone.to(device)
+            language = language.to(device)
 
             # 使用SDP（随机时长预测器）和不使用SDP分别进行推理
             for use_sdp in [True, False]:
-                y_hat, attn, mask, *_ = generator.module.infer(
+                y_hat, attn, mask, *_ = generator.infer(
                     x,
                     x_lengths,
                     speakers,

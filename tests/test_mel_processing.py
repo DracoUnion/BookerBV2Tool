@@ -52,21 +52,22 @@ def _clear_caches():
 
 @pytest.fixture
 def patched_librosa_mel(monkeypatch):
-    """Stub ``librosa.filters.mel``.
+    """Stub ``librosa.filters.mel`` with a deterministic filter bank.
 
-    The source calls it positionally, but librosa>=0.10 made its ``n_mels`` /
-    ``fmin`` / ``fmax`` arguments keyword-only, so the real call raises
-    TypeError.  We replace it with a deterministic filter bank so the mel
-    computation path (cache + matmul + log-normalize) can still be tested.
+    (The source previously called it positionally, which broke on librosa>=0.10
+    where the arguments are keyword-only; that was fixed to use keyword args.
+    The stub accepts keywords too and keeps the mel computation deterministic.)
     """
     import numpy as np
 
-    def mel_fn(sr, n_fft, n_mels, fmin, fmax):
+    def mel_fn(*args, **kwargs):
+        n_mels = kwargs.get("n_mels", 80)
+        n_fft = kwargs.get("n_fft", 1024)
         rng = np.random.default_rng(123)
         # small positive weights so log-compressed mel outputs stay < 0
-        return ((np.abs(rng.standard_normal((n_mels, n_fft // 2 + 1))) + 0.1) * 0.05).astype(
-            np.float32
-        )
+        return (
+            (np.abs(rng.standard_normal((n_mels, n_fft // 2 + 1))) + 0.1) * 0.05
+        ).astype(np.float32)
 
     monkeypatch.setattr(mel_processing, "librosa_mel_fn", mel_fn)
     return mel_fn

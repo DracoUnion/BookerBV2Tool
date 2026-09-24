@@ -146,7 +146,9 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
             for i in range(len(word2ph)):
                 word2ph[i] = word2ph[i] * 2
             word2ph[0] += 1
-        bert_path = wav_path.replace(".wav", ".bert.pt")
+        # 与 bert_gen 生成的 *_bert.pt 命名保持一致
+        bert_path = wav_path.lower().replace(".wav", "_bert.pt")
+        bert_ori = None
         try:
             bert_ori = torch.load(bert_path)
             assert bert_ori.shape[-1] == len(phone)
@@ -154,18 +156,22 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
             logger.warning("Bert load Failed")
             logger.warning(e)
 
+        # bert 特征缺失或加载失败时回退到随机向量，避免未赋值导致崩溃
+        def _rand_bert():
+            return torch.randn(1024, len(phone))
+
         if language_str == "ZH":
-            bert = bert_ori
-            ja_bert = torch.randn(1024, len(phone))
-            en_bert = torch.randn(1024, len(phone))
+            bert = bert_ori if bert_ori is not None else _rand_bert()
+            ja_bert = _rand_bert()
+            en_bert = _rand_bert()
         elif language_str == "JP":
-            bert = torch.randn(1024, len(phone))
-            ja_bert = bert_ori
-            en_bert = torch.randn(1024, len(phone))
+            bert = _rand_bert()
+            ja_bert = bert_ori if bert_ori is not None else _rand_bert()
+            en_bert = _rand_bert()
         elif language_str == "EN":
-            bert = torch.randn(1024, len(phone))
-            ja_bert = torch.randn(1024, len(phone))
-            en_bert = bert_ori
+            bert = _rand_bert()
+            ja_bert = _rand_bert()
+            en_bert = bert_ori if bert_ori is not None else _rand_bert()
         phone = torch.LongTensor(phone)
         tone = torch.LongTensor(tone)
         language = torch.LongTensor(language)
