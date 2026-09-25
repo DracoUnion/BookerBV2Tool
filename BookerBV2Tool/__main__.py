@@ -16,6 +16,12 @@ def _train_handle(args):
 
     train_handle(args)
 
+
+def _infer_handle(args):
+    from .infer import infer_handle
+
+    infer_handle(args)
+
 def main():
     parser = argparse.ArgumentParser(prog="BookerBV2Tool", formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-v", "--version", action="version", version=f"PYBP version: {__version__}")
@@ -75,6 +81,19 @@ def main():
         "--num_processes", type=int, default=8
     )
     bert_gen_parser.set_defaults(func=bert_gen_handle)
+
+    infer_parser = subparsers.add_parser("infer", help="synthesize text to speech")
+    infer_parser.add_argument("text", type=str, help='text to synthesize')
+    infer_parser.add_argument("model", type=str, help='model checkpoint path (G_*.pth)')
+    infer_parser.add_argument("-c", "--config", type=str, default='config.json', help='config json path')
+    infer_parser.add_argument("-s", "--sid", type=str, default=None, help='speaker name (default: first in spk2id)')
+    infer_parser.add_argument("-l", "--language", type=str, default='ZH', choices=['ZH', 'EN', 'JP'], help='language')
+    infer_parser.add_argument("-o", "--out", type=str, default='out.wav', help='output wav path')
+    infer_parser.add_argument("--sdp_ratio", type=float, default=0.2, help='SDP ratio')
+    infer_parser.add_argument("--noise_scale", type=float, default=0.6, help='noise scale')
+    infer_parser.add_argument("--noise_scale_w", type=float, default=0.8, help='noise scale w')
+    infer_parser.add_argument("--length_scale", type=float, default=1.0, help='length scale')
+    infer_parser.set_defaults(func=_infer_handle)
 
     train_parser = subparsers.add_parser("train", help="trains model")
     # 非必要不建议使用命令行配置，请使用config.yml文件
