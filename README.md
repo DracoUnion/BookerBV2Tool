@@ -37,16 +37,19 @@ speaker_list.json
   │  (6) bert-gen 为每段生成 BERT 音素向量 *_bert.pt
   ▼
 带 BERT 特征的数据
-  │  (7) train    训练模型
+  │  (7) train    训练模型（单机，有 GPU 用 CUDA，否则 CPU）
   ▼
 模型权重
+  │  (8) infer    文本转语音合成
+  ▼
+合成音频(WAV)
 ```
 
 ---
 
 ## 全局参数
 
-这些参数放在子命令之前，对所有子命令生效（仅 mark / preproc / bert-gen 需要用到）：
+这些参数放在子命令之前，对所有子命令生效（mark / preproc / bert-gen / infer 用）：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -227,8 +230,12 @@ BookerBV2Tool bert-gen -c config.json --num_processes 4
 
 ## 7. train — 训练模型
 
-用前面生成的数据训练 BV2 模型。训练参数写在 `config.json`（`data.*`、`train.*`、
-`model.*` 等字段）中，命令行只指定配置路径。
+用前面生成的数据训练 BV2 模型。**单机训练**：不再使用分布式进程组/DDP，设备
+自动选择——有 CUDA 用 GPU，否则在 CPU 上运行（`bf16` 混合精度与 WavLM/SLM 损失
+仅在设备支持/模型存在时启用）。
+
+训练参数全部写在 `config.json`（`train_ms.*`、`train.*`、`model.*`、`data.*`），
+命令行只指定配置路径。
 
 ```bash
 BookerBV2Tool train [-c 配置]
@@ -238,8 +245,48 @@ BookerBV2Tool train [-c 配置]
 | --- | --- | --- |
 | `-c, --config` | `config.json` | 配置文件路径 |
 
+**注意事项**：
+- `config.json` 需含 `train_ms` / `train` / `model` / `data` 四段（`preproc` 会以
+  包内 `config.json` 为模板合并生成）。
+- **音频采样率必须与 `data.sampling_rate` 一致**，否则加载数据时报 SR 不匹配。
+- `data.add_blank` 决定是否插入空白音素。
+- WavLM（SLM 增强损失）需要本地模型目录 `model.slm.model` 指向的 WavLM 模型；
+  路径不存在时自动退化为不含 SLM 的损失，便于在没有该模型时训练。
+- 模型构建较慢（数千万参数）；CPU 上单步也要数秒到数分钟。
+
 ```bash
 BookerBV2Tool train -c config.json
+```
+
+---
+
+## 8. infer — 文本转语音合成
+
+用训练好的生成器检查点（`G_*.pth`）把文本合成为音频。支持当前版本 2.3 的模型。
+
+```bash
+BookerBV2Tool [-cb 中文模型] [-eb 英文模型] [-jb 日文模型] infer "要合成的文本" 模型路径 [-s 说话人] [-l 语言] [-o 输出] [合成参数...]
+```
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `text` | 必填 | 待合成的文本 |
+| `model` | 必填 | 生成器检查点（`G_*.pth`） |
+| `-c, --config` | `config.json` | 配置文件（含 `model`/`data` 架构与 `spk2id`） |
+| `-s, --sid` | 第一个说话人 | 说话人名字（须在 `data.spk2id` 中） |
+| `-l, --language` | `ZH` | 语言，`ZH` / `EN` / `JP` |
+| `-o, --out` | `out.wav` | 输出 WAV 路径 |
+| `--sdp_ratio` | `0.2` | SDP 随机时长预测比例 |
+| `--noise_scale` | `0.6` | 生成噪声幅度 |
+| `--noise_scale_w` | `0.8` | 时长噪声幅度 |
+| `--length_scale` | `1.0` | 语速/长度缩放 |
+
+模型架构按 `config.json` 重建；对应语言的 BERT 模型来自全局参数（默认英文
+`microsoft/deberta-v3-large` 等）。设备同样自动选择（有 CUDA 用 GPU，否则 CPU）。
+
+```bash
+# 英文合成
+BookerBV2Tool infer "Hello, this is a synthesized voice." models/G_3000.pth -l EN -s wizard -o out.wav
 ```
 
 ---
@@ -265,8 +312,11 @@ BookerBV2Tool preproc resampled/speaker_list.json -tp train_list.json -vp val_li
 # 6) 生成 BERT 特征
 BookerBV2Tool bert-gen -c config.json --num_processes 4
 
-# 7) 训练
+# 7) 训练（单机，有 GPU 用 CUDA，否则 CPU）
 BookerBV2Tool train -c config.json
+
+# 8) 用训练好的模型合成语音
+BookerBV2Tool infer "你好，这是测试。" logs/44k/G_3000.pth -l ZH -s my_role -o out.wav
 ```
 
 ## 测试
