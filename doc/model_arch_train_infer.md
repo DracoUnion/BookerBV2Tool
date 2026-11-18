@@ -1332,104 +1332,451 @@ class SynthesizerTrn(nn.Module):
 
 训练入口是 `BookerBV2Tool train -c config.json`，单机单进程（不用分布式 DDP），有 CUDA 用 GPU，否则跑 CPU（CPU 上会自动关闭 bf16 混合精度）。
 
-### 3.1 训练数据长什么样？
+下面先用一张总览流程图展示整个训练 step：
+
+```mermaid
+flowchart TB
+    subgraph 数据准备
+    Loader[TextAudioSpeakerLoader<br/>读取 wav/phones/tone/bert/sid]:::data
+    Collate[TextAudioSpeakerCollate<br/>按 spec 长度降序排列 + 右侧 padding]:::data
+    Bucket[DistributedBucketSampler<br/>按音频长度分桶<br/>减少 padding 浪费]:::data
+    end
+
+    subgraph 生成器前向 AMP
+    Autocast[autocast bfloat16]:::amp
+    GenFwd[SynthesizerTrn.forward<br/>→ y_hat, attn, z, z_p, logw...]:::amp
+    Mel[spec_to_mel_torch + mel_spectrogram_torch<br/>切片 y_mel / y_hat_mel / y]:::amp
+    end
+
+    subgraph 判别器训练 梯度不回流到生成器
+    MPD[MPD net_d(y, y_hat.detach())]:::disc
+    LossD[discriminator_loss<br/>优化 optim_d]:::disc
+    DUR[时长判别器 net_dur_disc<br/>SDP + DP 两对]:::disc
+    LossDUR[优化 optim_dur_disc]:::disc
+    WAVLM[WavLM 判别器 wl.discriminator]:::disc
+    LossSLM[优化 optim_wd]:::disc
+    end
+
+    subgraph 生成器训练 梯度回流
+    MPD2[MPD net_d(y, y_hat) 不 detach]:::gen
+    DUR2[时长判别器 不 detach]:::gen
+    GenLoss[总损失 loss_gen_all<br/>gen + fm + mel + dur + kl + lm + lm_gen]:::gen
+    Backward[optim_g 反向 + scaler.step/update]:::gen
+    end
+
+    subgraph 日志与检查点
+    Log[TensorBoard 标量 + 图像<br/>loss/g/*, loss/d/*, grad_norm 等]:::log
+    Eval[eval_interval 步验证集推理<br/>sdp_ratio=0 和 =1]:::log
+    Ckpt[保存 G/D/WD/DUR_*.pth<br/>clean_checkpoints 清理旧文件]:::log
+    end
+
+    Loader --> Collate --> Bucket --> Autocast
+    Autocast --> GenFwd --> Mel
+    Mel --> MPD
+    Mel --> DUR
+    Mel --> WAVLM
+    MPD --> LossD
+    DUR --> LossDUR
+    WAVLM --> LossSLM
+    MPD2 --> GenLoss
+    DUR2 --> GenLoss
+    GenLoss --> Backward
+    Backward --> Log
+    Log --> Eval --> Ckpt
+
+    classDef data fill:#e1f5fe,stroke:#01579b
+    classDef amp fill:#f3e5f5,stroke:#4a148c
+    classDef disc fill:#ffebee,stroke:#b71c1c
+    classDef gen fill:#fff8e1,stroke:#f57f17
+    classDef log fill:#e8f5e9,stroke:#1b5e20
+```
+
+### 3.1 训练数据与数据加载器
 
 训练数据由前面的流水线产出：
 
-- `train_list.json` / `val_list.json`：每行是一条样本，包含音频路径、说话人、语言、文本等。
+- `train_list.json` / `val_list.json`：每行是一条样本，用 `|` 分隔，包含音频路径、说话人、语言、文本、音素、声调、word2ph 等。
 - 每段音频旁有一个 `*_bert.pt` 文件，存着三路 BERT 音素特征。
 - `config.json`：记录模型结构、说话人表 `spk2id`、训练/验证文件列表、超参数等。
 
-数据加载器 `TextAudioSpeakerLoader` 会：
-
-1. 读音频，归一化到 `audio / 32768.0`，校验采样率必须等于配置里的 `data.sampling_rate`（通常 44100）。
-2. 惰性计算线性频谱：优先读 `.spec.pt` 缓存，没有就用 STFT 现场算（2048 点，1025 频率箱，`center=False`）。
-3. 从 `*_bert.pt` 读 BERT 特征；缺失时退回随机向量，保证训练不中断。
-4. `Collate` 按频谱长度降序排列、右侧补零，组成一个 batch；`BucketSampler` 按音频长度分桶，让同一个 batch 里的语音长度尽量接近，减少 padding 浪费。
-
-### 3.2 训练主循环（一步步看）
-
-每个训练 step 大致分三阶段。下面用流程图展示整个训练 step：
+#### 数据加载流程图
 
 ```mermaid
-flowchart TD
-    Start([开始 step]) --> LoadBatch[加载一个 batch<br/>x, spec, y, sid, tone, language, bert...]
-    LoadBatch --> AMP1{AMP 混合精度?}
-    AMP1 -->|是| Autocast1[autocast bfloat16]
-    AMP1 -->|否| Normal1[FP32 前向]
-    Autocast1 --> GenFwd[生成器前向 net_g.forward<br/>→ y_hat, attn, z, z_p, logw...]
-    Normal1 --> GenFwd
-    GenFwd --> Mel[计算 mel 谱 y_mel, y_hat_mel<br/>切片音频 y, y_hat]
-
-    subgraph 判别器训练 梯度不回流到生成器
-    MPD1[MPD 判别器<br/>net_d(y, y_hat.detach())]
-    DUR1[时长判别器<br/>net_dur_disc(...detach...)]
-    WAVLM1[WavLM 判别器<br/>wl.discriminator(...detach...)]
+flowchart TB
+    subgraph 数据集 TextAudioSpeakerLoader
+    LoadList[load_filepaths_and_text<br/>按 | 分隔读取列表]:::ds
+    Shuffle[random.shuffle 随机打乱]:::ds
+    Filter[_filter()<br/>过滤 phones 长度不在 [1,384] 的样本]:::ds
+    GetPair[get_audio_text_speaker_pair<br/>get_text + get_audio + sid]:::ds
     end
 
-    Mel --> MPD1
-    MPD1 --> LossD[discriminator_loss<br/>优化 optim_d]
-    DUR1 --> LossDUR[耦合损失<br/>优化 optim_dur_disc]
-    WAVLM1 --> LossSLM[SLM 损失<br/>优化 optim_wd]
-
-    subgraph 生成器训练 梯度回流
-    MPD2[MPD 判别器<br/>net_d(y, y_hat) 不 detach]
-    DUR2[时长判别器<br/>不 detach]
+    subgraph 文本处理 get_text
+    CleanedSeq[cleaned_text_to_sequence<br/>音素→id，声调加语言偏移，语言 id]:::txt
+    AddBlank[add_blank=true 时 intersperse 插空白音素 0]:::txt
+    LoadBert[加载 *_bert.pt<br/>缺失时回退随机向量 randn(1024, T)]:::txt
     end
 
-    LossD --> GenTrain[生成器总损失<br/>loss_gen_all = gen+fm+mel+dur+kl+lm+lm_gen(+dur_gen)]
-    LossDUR --> GenTrain
-    LossSLM --> GenTrain
-    MPD2 --> GenTrain
-    DUR2 --> GenTrain
-    GenTrain --> Backward[反向传播 optim_g<br/>scaler.step + scaler.update]
-    Backward --> Log[记录日志 + TensorBoard<br/>每 eval_interval 步验证]
-    Log --> Next{还有 batch?}
-    Next -->|是| LoadBatch
-    Next -->|否| Scheduler[学习率调度器 step()<br/>ExponentialLR 衰减]
-    Scheduler --> End([epoch 结束])
+    subgraph 音频处理 get_audio
+    LoadWav[load_wav_to_torch<br/>音频归一化 audio/32768.0]:::aud
+    CheckSR[校验采样率 == data.sampling_rate]:::aud
+    SpecCache[优先读 .spec.pt 缓存]:::aud
+    SpecSTFT[未缓存时 spectrogram_torch<br/>2048 点 STFT，1025 频率箱，center=False]:::aud
+    end
 
-    style Start fill:#f9f,stroke:#333
-    style End fill:#f9f,stroke:#333
-    style GenTrain fill:#fff8e1,stroke:#f57f17
-    style LossD fill:#ffebee,stroke:#b71c1c
+    LoadList --> Shuffle --> Filter --> GetPair
+    GetPair --> CleanedSeq --> AddBlank --> LoadBert
+    GetPair --> LoadWav --> CheckSR --> SpecCache
+    SpecCache -.->|命中| GetPair
+    SpecCache -.->|未命中| SpecSTFT --> GetPair
+
+    classDef ds fill:#e1f5fe,stroke:#01579b
+    classDef txt fill:#f3e5f5,stroke:#4a148c
+    classDef aud fill:#fff8e1,stroke:#f57f17
 ```
 
-#### 第一阶段：生成器前向（AMP 混合精度）
+#### 关键代码（`data_utils.py:16-188`）
 
 ```python
-生成器前向 → o, attn, z, z_p, m_p, logs_p, m_q, logs_q, logw, logw_sdp, ...
+class TextAudioSpeakerLoader(torch.utils.data.Dataset):
+    def __init__(self, audiopaths_sid_text, hparams):
+        self.audiopaths_sid_text = load_filepaths_and_text(audiopaths_sid_text)
+        self.max_wav_value = hparams.max_wav_value
+        self.sampling_rate = hparams.sampling_rate
+        self.filter_length = hparams.filter_length
+        self.hop_length = hparams.hop_length
+        self.win_length = hparams.win_length
+        self.spk_map = hparams.spk2id
+        self.hparams = hparams
+
+        self.use_mel_spec_posterior = getattr(
+            hparams, "use_mel_posterior_encoder", False
+        )
+        self.cleaned_text = getattr(hparams, "cleaned_text", False)
+        self.add_blank = hparams.add_blank
+        self.min_text_len = getattr(hparams, "min_text_len", 1)
+        self.max_text_len = getattr(hparams, "max_text_len", 384)
+
+        random.seed(1234)
+        random.shuffle(self.audiopaths_sid_text)
+        self._filter()
+
+    def _filter(self):
+        """过滤文本长度不合规的样本，并记录每个音频的频谱长度（用于分桶）"""
+        audiopaths_sid_text_new = []
+        lengths = []
+        skipped = 0
+        for _id, spk, language, text, phones, tone, word2ph in tqdm(
+            self.audiopaths_sid_text
+        ):
+            audiopath = f"{_id}"
+            if self.min_text_len <= len(phones) and len(phones) <= self.max_text_len:
+                phones = phones.split(" ")
+                tone = [int(i) for i in tone.split(" ")]
+                word2ph = [int(i) for i in word2ph.split(" ")]
+                audiopaths_sid_text_new.append(
+                    [audiopath, spk, language, text, phones, tone, word2ph]
+                )
+                # spec_length ≈ wav_length // hop_length
+                lengths.append(os.path.getsize(audiopath) // (2 * self.hop_length))
+            else:
+                skipped += 1
+        self.audiopaths_sid_text = audiopaths_sid_text_new
+        self.lengths = lengths
+
+    def get_audio_text_speaker_pair(self, audiopath_sid_text):
+        audiopath, sid, language, text, phones, tone, word2ph = audiopath_sid_text
+        bert, ja_bert, en_bert, phones, tone, language = self.get_text(
+            text, word2ph, phones, tone, language, audiopath
+        )
+        spec, wav = self.get_audio(audiopath)
+        sid = torch.LongTensor([int(self.spk_map[sid])])
+        return (phones, spec, wav, sid, tone, language, bert, ja_bert, en_bert)
+
+    def get_audio(self, filename):
+        audio, sampling_rate = load_wav_to_torch(filename)
+        if sampling_rate != self.sampling_rate:
+            raise ValueError(
+                "{} {} SR doesn't match target {} SR".format(
+                    filename, sampling_rate, self.sampling_rate
+                )
+            )
+        audio_norm = audio / self.max_wav_value
+        audio_norm = audio_norm.unsqueeze(0)
+        spec_filename = filename.replace(".wav", ".spec.pt")
+        try:
+            spec = torch.load(spec_filename)  # 优先读缓存
+        except:
+            spec = spectrogram_torch(
+                audio_norm, self.filter_length, self.sampling_rate,
+                self.hop_length, self.win_length, center=False,
+            )
+            spec = torch.squeeze(spec, 0)
+            if config.train_ms_config.spec_cache:
+                torch.save(spec, spec_filename)  # 写回缓存
+        return spec, audio_norm
+
+    def get_text(self, text, word2ph, phone, tone, language_str, wav_path):
+        phone, tone, language = cleaned_text_to_sequence(phone, tone, language_str)
+        if self.add_blank:
+            phone = commons.intersperse(phone, 0)
+            tone = commons.intersperse(tone, 0)
+            language = commons.intersperse(language, 0)
+            for i in range(len(word2ph)):
+                word2ph[i] = word2ph[i] * 2
+            word2ph[0] += 1
+        bert_path = wav_path.lower().replace(".wav", "_bert.pt")
+        bert_ori = None
+        try:
+            bert_ori = torch.load(bert_path)
+            assert bert_ori.shape[-1] == len(phone)
+        except Exception as e:
+            logger.warning("Bert load Failed")
+            logger.warning(e)
+
+        def _rand_bert():
+            return torch.randn(1024, len(phone))
+
+        if language_str == "ZH":
+            bert = bert_ori if bert_ori is not None else _rand_bert()
+            ja_bert = _rand_bert()
+            en_bert = _rand_bert()
+        elif language_str == "JP":
+            bert = _rand_bert()
+            ja_bert = bert_ori if bert_ori is not None else _rand_bert()
+            en_bert = _rand_bert()
+        elif language_str == "EN":
+            bert = _rand_bert()
+            ja_bert = _rand_bert()
+            en_bert = bert_ori if bert_ori is not None else _rand_bert()
+        phone = torch.LongTensor(phone)
+        tone = torch.LongTensor(tone)
+        language = torch.LongTensor(language)
+        return bert, ja_bert, en_bert, phone, tone, language
 ```
 
-模型把一批文本和音频喂进 `SynthesizerTrn.forward`，得到生成的音频片段 `o`、对齐矩阵 `attn`、各种中间分布参数。
+#### Collate 与 BucketSampler
 
-#### 第二阶段：训练判别器（梯度不回流到生成器）
+`TextAudioSpeakerCollate`（`data_utils.py:191`）负责把一个 batch 里的不同样本右侧补零对齐到最大长度，并按频谱长度降序排列。
 
-判别器看真实音频 `y` 和生成音频 `o`，学会分辨真假：
+`DistributedBucketSampler`（`data_utils.py:283`）按音频 spec 长度分桶 `[32,300,400,500,600,700,800,900,1000]`，桶内 gather 样本凑整除，返回按桶随机的 batch 索引，保证同 batch 里的语音长度尽量接近，减少 padding 浪费。
 
-- **MPD**：LSGAN 损失，分别对真实和生成波形打分。
-- **时长判别器**：如果启用，分别喂 `(真实时长, 预测时长)` 两对，让 SDP 和 DP 各自被鉴别。
-- **WavLM 判别器**：如果本地有 WavLM 模型，计算语义判别损失 `loss_slm`。
+```python
+class TextAudioSpeakerCollate:
+    def __init__(self, return_ids=False):
+        self.return_ids = return_ids
 
-各判别器有自己的优化器（`optim_d` / `optim_dur` / `optim_wd`），反向更新。
+    def __call__(self, batch):
+        # 按 spec 长度降序排列
+        _, ids_sorted_decreasing = torch.sort(
+            torch.LongTensor([x[1].size(1) for x in batch]), dim=0, descending=True
+        )
+        max_text_len = max([len(x[0]) for x in batch])
+        max_spec_len = max([x[1].size(1) for x in batch])
+        max_wav_len = max([x[2].size(1) for x in batch])
 
-#### 第三阶段：训练生成器（梯度经生成器回传）
+        # 分配并零填充所有张量
+        text_padded = torch.LongTensor(len(batch), max_text_len)
+        tone_padded = torch.LongTensor(len(batch), max_text_len)
+        language_padded = torch.LongTensor(len(batch), max_text_len)
+        bert_padded = torch.FloatTensor(len(batch), 1024, max_text_len)
+        ja_bert_padded = torch.FloatTensor(len(batch), 1024, max_text_len)
+        en_bert_padded = torch.FloatTensor(len(batch), 1024, max_text_len)
+        spec_padded = torch.FloatTensor(len(batch), batch[0][1].size(0), max_spec_len)
+        wav_padded = torch.FloatTensor(len(batch), 1, max_wav_len)
+        # ... zero_() 初始化 ...
 
-生成器要同时满足多个目标，总损失是下列各项之和：
+        for i in range(len(ids_sorted_decreasing)):
+            row = batch[ids_sorted_decreasing[i]]
+            # 把每个样本填入对应位置，其余保持 0
+            text = row[0]
+            text_padded[i, : text.size(0)] = text
+            # ... spec, wav, sid, tone, language, bert 同理 ...
 
-| 损失 | 含义 | 系数 |
-|------|------|------|
-| `loss_mel` | 生成 mel 谱与真实 mel 谱的 L1 距离 | 45 |
-| `loss_kl` | 后验流 `z_p` 与先验分布 `N(m_p, logs_p)` 的 KL 散度，做正则化 | 1.0 |
-| `loss_dur` | SDP 的 NLL + DP/SDP 时长与真实时长的 MSE | 1 |
-| `loss_gen` | 生成器 LSGAN 对抗损失（“骗过判别器”） | 1 |
-| `loss_fm` | 特征匹配损失，生成器中间特征要逼近真实音频的特征 | 1 |
-| `loss_lm` | WavLM 全层隐藏态 L1（语义保持） | 1 |
-| `loss_lm_gen` | WavLM 判别器上的生成损失 | 1 |
+        return (
+            text_padded, text_lengths, spec_padded, spec_lengths,
+            wav_padded, wav_lengths, sid,
+            tone_padded, language_padded,
+            bert_padded, ja_bert_padded, en_bert_padded,
+        )
+```
 
-生成器优化器 `optim_g` 做一次反向 + 更新，一个 step 完成。
+### 3.2 损失函数详解
 
-下面是一个完整训练 step 的 PyTorch 伪代码（对应 `train.py` 中 `train_and_evaluate` 的核心逻辑），可直接参考实际实现：
+训练中涉及多种损失函数，下面按类别展开：
+
+#### 损失函数调用关系图
+
+```mermaid
+flowchart TB
+    subgraph 判别器损失 (optim_d / optim_dur / optim_wd)
+    DiscLoss[discriminator_loss<br/>LSGAN: mean((1-dr)^2) + mean(dg^2)]:::loss
+    end
+
+    subgraph 生成器损失 (optim_g)
+    GenLoss[generator_loss<br/>mean((1-dg)^2)]:::loss
+    FMLoss[feature_loss<br/>Σ|fmap_r - fmap_g| × 2]:::loss
+    MelLoss[F.l1_loss(y_mel, y_hat_mel) × c_mel]:::loss
+    KLLoss[kl_loss<br/>KL(后验 vs 先验) × c_kl]:::loss
+    DurLoss[时长损失<br/>SDP NLL + DP/SDP MSE]:::loss
+    LMLoss[WavLM 全层隐藏态 L1]:::loss
+    LMGenLoss[WavLM 判别器生成损失]:::loss
+    end
+
+    subgraph 总生成器损失
+    GenAll[loss_gen_all = gen + fm + mel + dur + kl + lm + lm_gen<br/>(+ dur_gen 如果启用时长判别器)]:::total
+    end
+
+    DiscLoss --> GenAll
+    GenLoss --> GenAll
+    FMLoss --> GenAll
+    MelLoss --> GenAll
+    KLLoss --> GenAll
+    DurLoss --> GenAll
+    LMLoss --> GenAll
+    LMGenLoss --> GenAll
+
+    classDef loss fill:#ffebee,stroke:#b71c1c
+    classDef total fill:#e8f5e9,stroke:#1b5e20
+```
+
+#### 各损失函数代码（`losses.py`）
+
+```python
+# 特征匹配损失：让生成器中间特征逼近真实音频
+def feature_loss(fmap_r, fmap_g):
+    loss = 0
+    for dr, dg in zip(fmap_r, fmap_g):
+        for rl, gl in zip(dr, dg):
+            rl = rl.float().detach()
+            gl = gl.float()
+            loss += torch.mean(torch.abs(rl - gl))
+    return loss * 2
+
+
+# 判别器 LSGAN 损失
+def discriminator_loss(disc_real_outputs, disc_generated_outputs):
+    loss = 0
+    r_losses = []
+    g_losses = []
+    for dr, dg in zip(disc_real_outputs, disc_generated_outputs):
+        dr = dr.float()
+        dg = dg.float()
+        r_loss = torch.mean((1 - dr) ** 2)
+        g_loss = torch.mean(dg**2)
+        loss += r_loss + g_loss
+        r_losses.append(r_loss.item())
+        g_losses.append(g_loss.item())
+    return loss, r_losses, g_losses
+
+
+# 生成器 LSGAN 对抗损失
+def generator_loss(disc_outputs):
+    loss = 0
+    gen_losses = []
+    for dg in disc_outputs:
+        dg = dg.float()
+        l = torch.mean((1 - dg) ** 2)
+        gen_losses.append(l)
+        loss += l
+    return loss, gen_losses
+
+
+# KL 散度损失：后验分布 vs 先验分布，做正则化
+def kl_loss(z_p, logs_q, m_p, logs_p, z_mask):
+    z_p = z_p.float()
+    logs_q = logs_q.float()
+    m_p = m_p.float()
+    logs_p = logs_p.float()
+    z_mask = z_mask.float()
+    kl = logs_p - logs_q - 0.5
+    kl += 0.5 * ((z_p - m_p) ** 2) * torch.exp(-2.0 * logs_p)
+    kl = torch.sum(kl * z_mask)
+    l = kl / torch.sum(z_mask)
+    return l
+```
+
+#### WavLM 语义损失（`losses.py:63-137`）
+
+WavLM 损失用于保持生成语音的语义一致性。它加载本地 WavLM 模型（默认 `./slm/wavlm-base-plus`），提取真实音频和生成音频的 13 层隐藏状态，计算 L1 距离：
+
+```python
+class WavLMLoss(torch.nn.Module):
+    def __init__(self, model, wd, model_sr, slm_sr=16000):
+        super(WavLMLoss, self).__init__()
+        self.wavlm = AutoModel.from_pretrained(model)
+        self.wd = wd
+        self.resample = torchaudio.transforms.Resample(model_sr, slm_sr)
+        self.wavlm.eval()
+        for param in self.wavlm.parameters():
+            param.requires_grad = False  # WavLM 冻结，只作为特征提取器
+
+    def forward(self, wav, y_rec):
+        # 语义特征 L1 损失（生成器用）
+        with torch.no_grad():
+            wav_16 = self.resample(wav)
+            wav_embeddings = self.wavlm(
+                input_values=wav_16, output_hidden_states=True
+            ).hidden_states
+        y_rec_16 = self.resample(y_rec)
+        y_rec_embeddings = self.wavlm(
+            input_values=y_rec_16.squeeze(), output_hidden_states=True
+        ).hidden_states
+        floss = 0
+        for er, eg in zip(wav_embeddings, y_rec_embeddings):
+            floss += torch.mean(torch.abs(er - eg))
+        return floss.mean()
+
+    def generator(self, y_rec):
+        # WavLM 判别器上的生成损失
+        y_rec_16 = self.resample(y_rec)
+        y_rec_embeddings = self.wavlm(
+            input_values=y_rec_16, output_hidden_states=True
+        ).hidden_states
+        y_rec_embeddings = (
+            torch.stack(y_rec_embeddings, dim=1)
+            .transpose(-1, -2)
+            .flatten(start_dim=1, end_dim=2)
+        )
+        y_df_hat_g = self.wd(y_rec_embeddings)
+        loss_gen = torch.mean((1 - y_df_hat_g) ** 2)
+        return loss_gen
+
+    def discriminator(self, wav, y_rec):
+        # WavLM 判别器的判别损失
+        with torch.no_grad():
+            wav_16 = self.resample(wav)
+            wav_embeddings = self.wavlm(
+                input_values=wav_16, output_hidden_states=True
+            ).hidden_states
+            y_rec_16 = self.resample(y_rec)
+            y_rec_embeddings = self.wavlm(
+                input_values=y_rec_16.squeeze(), output_hidden_states=True
+            ).hidden_states
+            y_embeddings = (
+                torch.stack(wav_embeddings, dim=1)
+                .transpose(-1, -2)
+                .flatten(start_dim=1, end_dim=2)
+            )
+            y_rec_embeddings = (
+                torch.stack(y_rec_embeddings, dim=1)
+                .transpose(-1, -2)
+                .flatten(start_dim=1, end_dim=2)
+            )
+        y_d_rs = self.wd(y_embeddings)
+        y_d_gs = self.wd(y_rec_embeddings)
+        r_loss = torch.mean((1 - y_df_hat_r) ** 2)
+        g_loss = torch.mean((y_df_hat_g) ** 2)
+        loss_disc_f = r_loss + g_loss
+        return loss_disc_f.mean()
+```
+
+**要点：**
+- 如果本地没有 WavLM 模型目录，`train.py` 会使用 `_NoWavLM` 占位，相关损失置 0，保证无 WavLM 时也能训练（尤其适合 CPU 环境）。
+- `loss_mel` 系数为 45，是训练中最大的损失项，说明重建音频保真度是训练核心目标之一。
+
+### 3.3 训练主循环（完整代码）
+
+下面是 `train_and_evaluate` 中单个训练 step 的完整代码（对应 `train.py:472-812`），包含判别器训练、生成器训练、日志记录和检查点保存：
 
 ```python
 import torch
@@ -1446,11 +1793,11 @@ from BookerBV2Tool.mel_processing import mel_spectrogram_torch, spec_to_mel_torc
 def train_step(batch, net_g, net_d, net_dur_disc, net_wd, wl,
                optim_g, optim_d, optim_dur_disc, optim_wd,
                scaler, config, device, amp_enabled, global_step):
-    """一个训练 step 的完整流程（对应 train_and_evaluate 核心逻辑）。"""
+    """一个训练 step 的完整流程。"""
     (x, x_lengths, spec, spec_lengths, y, y_lengths,
      speakers, tone, language, bert, ja_bert, en_bert) = batch
 
-    # ----- 把数据搬到设备（CPU/GPU） -----
+    # ----- 把数据搬到设备 -----
     x, x_lengths = x.to(device), x_lengths.to(device)
     spec, spec_lengths = spec.to(device), spec_lengths.to(device)
     y, y_lengths = y.to(device), y_lengths.to(device)
@@ -1472,11 +1819,10 @@ def train_step(batch, net_g, net_d, net_dur_disc, net_wd, wl,
             x, x_lengths, spec, spec_lengths, speakers,
             tone, language, bert, ja_bert, en_bert)
 
-    # 把线性谱转成 mel 谱，并切成固定长度片段（用于 loss_mel）
+    # 线性谱 -> mel 谱，切成固定长度片段
     mel = spec_to_mel_torch(spec, config['data']['filter_length'],
-                            config['data']['n_mel_channels'],
-                            config['data']['sampling_rate'],
-                            config['data']['mel_fmin'], config['data']['mel_fmax'])
+        config['data']['n_mel_channels'], config['data']['sampling_rate'],
+        config['data']['mel_fmin'], config['data']['mel_fmax'])
     y_mel = commons.slice_segments(mel, ids_slice, segment_size // hop)
     y_hat_mel = mel_spectrogram_torch(y_hat.squeeze(1).float(),
         config['data']['filter_length'], config['data']['n_mel_channels'],
@@ -1505,14 +1851,13 @@ def train_step(batch, net_g, net_d, net_dur_disc, net_wd, wl,
         loss_dur_disc, _, _ = discriminator_loss(
             y_dur_hat_r + y_dur_hat_r_sdp,
             y_dur_hat_g + y_dur_hat_g_sdp)
-
         optim_dur_disc.zero_grad()
         scaler.scale(loss_dur_disc).backward()
         scaler.unscale_(optim_dur_disc)
         scaler.step(optim_dur_disc)
 
     # WavLM 判别器（SLM，语义判别；本地无模型时退化为 0）
-    if not isinstance(wl, _NoWavLM):  # _NoWavLM 见 train.py 占位实现
+    if not isinstance(wl, _NoWavLM):
         with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
             loss_slm = wl.discriminator(
                 y.detach().squeeze(), y_hat.detach().squeeze()).mean()
@@ -1523,7 +1868,6 @@ def train_step(batch, net_g, net_d, net_dur_disc, net_wd, wl,
 
     # ---------- 3. 生成器训练（梯度经生成器回传）----------
     with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
-        # 不 detach，让梯度能回传到生成器
         y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
 
         loss_dur = torch.sum(l_length.float())
@@ -1534,14 +1878,13 @@ def train_step(batch, net_g, net_d, net_dur_disc, net_wd, wl,
         loss_lm = wl(y.detach().squeeze(), y_hat.squeeze()).mean()
         loss_lm_gen = wl.generator(y_hat.squeeze())
 
-        # 总生成器损失：对抗 + 特征匹配 + mel + 时长 + KL + 语义
         loss_gen_all = (loss_gen + loss_fm + loss_mel + loss_dur + loss_kl
                         + loss_lm + loss_lm_gen)
         if net_dur_disc is not None:
             _, y_dur_hat_g = net_dur_disc(hidden_x, x_mask, logw_, logw, g)
             _, y_dur_hat_g_sdp = net_dur_disc(hidden_x, x_mask, logw_, logw_sdp, g)
             loss_dur_gen, _ = generator_loss(y_dur_hat_g + y_dur_hat_g_sdp)
-            loss_gen_all = loss_gen_all + loss_dur_gen
+            loss_gen_all += loss_dur_gen
 
     optim_g.zero_grad()
     scaler.scale(loss_gen_all).backward()
@@ -1561,21 +1904,115 @@ def train_step(batch, net_g, net_d, net_dur_disc, net_wd, wl,
     }
 ```
 
-### 3.3 优化器与学习率调度
+### 3.4 优化器与学习率调度
 
 - 生成器、MPD、时长判别器各用独立的 `AdamW(lr=2e-4, betas=(0.8, 0.99), eps=1e-9)`。
 - `ExponentialLR(gamma=0.99995)`，每个 epoch 乘一次衰减，学习率非常缓慢地下降。
 - 使用原生 `autocast(dtype=bfloat16)` + `GradScaler` 做混合精度训练；CPU 上关闭 AMP。
 - 梯度裁剪：bf16 时生成器 clip 500、判别器 clip 200，防止梯度爆炸。
 
-### 3.4 检查点与断点续跑
+### 3.5 检查点与断点续跑
 
-训练会定期保存检查点：`G_{step}.pth`、`D_{step}.pth`、`WD_{step}.pth`、`DUR_{step}.pth`，里面包含模型权重、迭代次数、优化器状态、学习率等。
+训练每 `eval_interval` 步保存一次检查点：`G_{step}.pth`、`D_{step}.pth`、`WD_{step}.pth`、`DUR_{step}.pth`，里面包含模型权重、迭代次数、优化器状态、学习率等。
 
-- 恢复训练时自动找 `model_dir` 下编号最大的 `G_*.pth` 续跑，默认只载权重（`skip_optimizer=True`）。
+#### 检查点保存代码（`utils.py:102-119`）
+
+```python
+def save_checkpoint(model, optimizer, learning_rate, iteration, checkpoint_path):
+    logger.info(
+        "Saving model and optimizer state at iteration {} to {}".format(
+            iteration, checkpoint_path
+        )
+    )
+    if hasattr(model, "module"):
+        state_dict = model.module.state_dict()
+    else:
+        state_dict = model.state_dict()
+    torch.save(
+        {
+            "model": state_dict,
+            "iteration": iteration,
+            "optimizer": optimizer.state_dict(),
+            "learning_rate": learning_rate,
+        },
+        checkpoint_path,
+    )
+```
+
+#### 检查点恢复代码（`utils.py:44-99`）
+
+```python
+def load_checkpoint(checkpoint_path, model, optimizer=None, skip_optimizer=False):
+    assert os.path.isfile(checkpoint_path)
+    checkpoint_dict = torch.load(checkpoint_path, map_location="cpu")
+    iteration = checkpoint_dict["iteration"]
+    learning_rate = checkpoint_dict["learning_rate"]
+    if (optimizer is not None and not skip_optimizer
+            and checkpoint_dict["optimizer"] is not None):
+        optimizer.load_state_dict(checkpoint_dict["optimizer"])
+    # ... 兼容旧检查点缺 ja_bert_proj 时自动补零 ...
+    saved_state_dict = checkpoint_dict["model"]
+    state_dict = model.state_dict()
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        try:
+            new_state_dict[k] = saved_state_dict[k]
+            assert saved_state_dict[k].shape == v.shape
+        except:
+            if "ja_bert_proj" in k:
+                v = torch.zeros_like(v)  # 旧版本兼容：自动补零
+            new_state_dict[k] = v
+    model.load_state_dict(new_state_dict, strict=False)
+    return model, optimizer, learning_rate, iteration
+```
+
+**恢复逻辑：**
+- 自动找 `model_dir` 下编号最大的 `G_*.pth` 续跑，默认只载权重（`skip_optimizer=True`）。
 - 可选地从 Hugging Face 下载底模做初始化（`use_base_model`）。
 - `keep_ckpts` 默认保留 8 个，多余的按时间删除，节省磁盘空间。
-- 每 `eval_interval` 步在验证集上跑一次推理（`sdp_ratio=0` 和 `=1` 各一次），把 mel 图、音频、对齐矩阵写入 TensorBoard，方便直观观察训练效果。
+
+### 3.6 评估与日志
+
+每 `eval_interval` 步在验证集上跑一次 `evaluate`（`train.py:818`），把 mel 图、音频、对齐矩阵写入 TensorBoard：
+
+```python
+def evaluate(config, generator, eval_loader, writer_eval):
+    generator.eval()
+    device = _device()
+    image_dict = {}
+    audio_dict = {}
+    with torch.no_grad():
+        for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths,
+                        sid, tone, language, bert, ja_bert, en_bert) in enumerate(eval_loader):
+            x, x_lengths = x.to(device), x_lengths.to(device)
+            spec, spec_lengths = spec.to(device), spec_lengths.to(device)
+            y, y_lengths = y.to(device), y_lengths.to(device)
+            sid = sid.to(device)
+            tone = tone.to(device)
+            language = language.to(device)
+            bert = bert.to(device)
+            ja_bert = ja_bert.to(device)
+            en_bert = en_bert.to(device)
+
+            # 生成器推理（sdp_ratio=0 纯 DP，=1 纯 SDP）
+            y_hat, attn, mask, _ = generator.infer(
+                x, x_lengths, sid, tone, language, bert, ja_bert, en_bert,
+                sdp_ratio=0.0, noise_scale=0.667, length_scale=1.0
+            )
+            # 记录 mel 图和对齐图到 TensorBoard
+            image_dict[f"eval/mel_org_{batch_idx}"] = utils.plot_spectrogram_to_numpy(
+                spec_to_mel_torch(y[0].unsqueeze(0), ...)[0].cpu().numpy()
+            )
+            image_dict[f"eval/mel_gen_{batch_idx}"] = utils.plot_spectrogram_to_numpy(
+                mel_spectrogram_torch(y_hat[0].unsqueeze(0), ...)[0].cpu().numpy()
+            )
+            image_dict[f"eval/attn_{batch_idx}"] = utils.plot_alignment_to_numpy(
+                attn[0, 0].cpu().numpy()
+            )
+    utils.summarize(writer=writer_eval, global_step=global_step, images=image_dict)
+```
+
+TensorBoard 标量包括：`loss/g/*`（total/fm/mel/dur/kl/lm/lm_gen/dur_gen）、`loss/d_*`、`loss/dur_disc*`、`loss/wd/total`、学习率、三路 grad_norm；图像包括真/伪 mel、全谱 mel、对齐 `attn`。目录为 `model_dir/eval`。
 
 ---
 
@@ -1594,33 +2031,160 @@ BookerBV2Tool [-cb 中文BERT] [-eb 英文BERT] [-jb 日文BERT] \
 下面用流程图展示完整的推理过程：
 
 ```mermaid
-flowchart TD
-    Start([推理开始]) --> LoadModel[加载生成器 G_*.pth<br/>get_net_g → SynthesizerTrn.eval()]
-    LoadModel --> Text[文本预处理 get_text<br/>clean_text → 音素/声调/word2ph<br/>cleaned_text_to_sequence → id<br/>add_blank 插空白音素<br/>get_bert_feature 三路 BERT]
-    Text --> EncP[enc_p 编码文本<br/>→ 先验 m_p/logs_p + x_mask]
-    EncP --> Dur[时长预测<br/>logw = SDP×sdp_ratio + DP×(1-sdp_ratio)<br/>w = exp(logw)×mask×length_scale<br/>w_ceil = ceil(w)]
-    Dur --> Path[generate_path 构造单调对齐 attn<br/>m_p/logs_p 铺开到频谱帧]
-    Path --> Sample[先验采样<br/>z_p = m_p + randn×exp(logs_p)×noise_scale]
-    Sample --> FlowRev[逆转流 flow(z_p, reverse=True)<br/>→ 声学隐变量 z]
-    FlowRev --> Gen[HiFi-GAN 解码 dec(z×mask, g)<br/>→ 波形 o]
-    Gen --> Save[soundfile.write 写出 WAV<br/>采样率 data.sampling_rate]
-    Save --> End([合成完成 out.wav])
+flowchart TB
+    Start([推理开始]):::start
+    LoadModel[加载生成器 G_*.pth<br/>get_net_g → SynthesizerTrn.eval()]:::model
+    TextPre[文本前处理<br/>clean_text → 音素/声调/word2ph<br/>cleaned_text_to_sequence → id<br/>add_blank 插空白音素<br/>get_bert_feature 三路 BERT]:::text
+    EncP[enc_p 编码文本<br/>→ 先验 m_p/logs_p + x_mask]:::enc
+    Dur[时长预测<br/>logw = SDP×sdp_ratio + DP×(1-sdp_ratio)<br/>w = exp(logw)×mask×length_scale<br/>w_ceil = ceil(w)]:::dur
+    Path[generate_path 构造单调对齐 attn<br/>m_p/logs_p 铺开到频谱帧]:::path
+    Sample[先验采样<br/>z_p = m_p + randn×exp(logs_p)×noise_scale]:::sample
+    FlowRev[逆转流 flow(z_p, reverse=True)<br/>→ 声学隐变量 z]:::flow
+    Gen[HiFi-GAN 解码 dec(z×mask, g)<br/>→ 波形 o]:::gen
+    Save[soundfile.write 写出 WAV<br/>采样率 data.sampling_rate]:::save
+    End([合成完成 out.wav]):::end
 
-    style Start fill:#f9f,stroke:#333
-    style End fill:#f9f,stroke:#333
-    style LoadModel fill:#e1f5fe,stroke:#01579b
-    style Text fill:#f3e5f5,stroke:#4a148c
-    style Gen fill:#fff8e1,stroke:#f57f17
-    style Save fill:#e8f5e9,stroke:#1b5e20
+    Start --> LoadModel --> TextPre --> EncP --> Dur --> Path --> Sample --> FlowRev --> Gen --> Save --> End
+
+    classDef start fill:#f9f,stroke:#333
+    classDef end fill:#f9f,stroke:#333
+    classDef model fill:#e1f5fe,stroke:#01579b
+    classDef text fill:#f3e5f5,stroke:#4a148c
+    classDef enc fill:#e0f7fa,stroke:#006064
+    classDef dur fill:#fff3e0,stroke:#e65100
+    classDef path fill:#fce4ec,stroke:#880e4f
+    classDef sample fill:#e8f5e9,stroke:#1b5e20
+    classDef flow fill:#e0f7fa,stroke:#006064
+    classDef gen fill:#fff8e1,stroke:#f57f17
+    classDef save fill:#e8f5e9,stroke:#1b5e20
 ```
 
 ### 4.1 第一步：文本 → 模型输入（`get_text`）
 
-1. 根据目标语言选用对应的 BERT 模型（中文/英文/日文各一套）。
-2. `clean_text`：该语言的文本规范化 + G2P（grapheme-to-phoneme，字母/汉字转音素），得到音素 `phones`、声调 `tones`、`word2ph`（每个音素对应多少个字符）。
-3. `cleaned_text_to_sequence`：音素转 id、声调加语言偏移、分配语言 id。
-4. 如果开启 `add_blank`，在音素之间插入空白音素 `_`（id 0），`word2ph` 同步翻倍——这是 BV2 的一种约定，用于下游对齐。
-5. `get_bert_feature`：对**目标语言**的文本计算 phone 级 BERT 特征；另外两路语言传随机噪声 `randn(1024, len(phone))` 作为占位。这与训练侧缺少 `*_bert.pt` 时的兜底逻辑一致。
+#### 文本前处理流程图
+
+```mermaid
+flowchart TB
+    Input[原始文本<br/>"你好，世界"]:::in
+    Norm[文本规范化 text_normalize<br/>数字转汉字、标点归一化]:::proc
+    G2P[G2P 字母/汉字→音素<br/>chinese / japanese / english]:::proc
+    Word2ph[word2ph<br/>每个音素对应多少个字符]:::proc
+    Seq[cleaned_text_to_sequence<br/>音素→id、声调加语言偏移、语言 id]:::proc
+    Blank[add_blank 插空白音素 0<br/>word2ph 同步翻倍]:::proc
+    Bert[get_bert_feature<br/>目标语言用真实 BERT<br/>其它两路用随机噪声]:::proc
+    Tensor[构造张量输入<br/>x, tones, lang_ids, bert, ja_bert, en_bert]:::out
+
+    Input --> Norm --> G2P --> Word2ph --> Seq --> Blank --> Bert --> Tensor
+
+    classDef in fill:#e1f5fe,stroke:#01579b
+    classDef proc fill:#f3e5f5,stroke:#4a148c
+    classDef out fill:#e8f5e9,stroke:#1b5e20
+```
+
+#### 关键代码（`text/cleaner.py`）
+
+```python
+from . import chinese, japanese, english
+from .symbols import *
+import torch
+from transformers import AutoTokenizer, AutoModelForMaskedLM
+
+language_module_map = {"ZH": chinese, "JP": japanese, "EN": english}
+
+_symbol_to_id = {s: i for i, s in enumerate(symbols)}
+
+name_model_map = {}
+name_tok_map = {}
+
+
+def get_bert_feature(
+    model_name,
+    text,
+    word2ph,
+    device='cuda' if torch.cuda.is_available() else 'cpu',
+    style_text=None,
+    style_weight=0.7,
+):
+    """计算 phone 级 BERT 特征，并按 word2ph 重复扩展到音素长度。"""
+    # 加载并缓存 BERT 模型和分词器
+    if model_name not in name_model_map:
+        model = AutoModelForMaskedLM \
+            .from_pretrained(model_name, trust_remote_code=True).to(device)
+        name_model_map[model_name] = model
+    else:
+        model = name_model_map[model_name]
+    if model_name not in name_tok_map:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        name_tok_map[model_name] = tokenizer
+    else:
+        tokenizer = name_tok_map[model_name]
+
+    with torch.no_grad():
+        inputs = tokenizer(text, return_tensors="pt")
+        for i in inputs:
+            inputs[i] = inputs[i].to(device)
+        res = model(**inputs, output_hidden_states=True)
+        # 取倒数第 3 层隐藏状态 [batch, seq, 1024]
+        res = res["hidden_states"][-3][0].cpu()
+
+    # 可选：风格融合，将 style_text 的语义混入目标文本
+    if style_text:
+        style_inputs = tokenizer(style_text, return_tensors="pt")
+        for i in style_inputs:
+            style_inputs[i] = style_inputs[i].to(device)
+        style_res = model(**style_inputs, output_hidden_states=True)
+        style_res = torch.cat(style_res["hidden_states"][-3:-2], -1)[0].cpu()
+        style_res_mean = style_res.mean(0)
+
+    # 将字符级特征扩展到音素级：每个字符对应 word2ph[i] 个音素
+    word2phone = word2ph
+    phone_level_feature = []
+    for i in range(len(word2phone)):
+        if style_text:
+            repeat_feature = (
+                res[i].repeat(word2phone[i], 1) * (1 - style_weight)
+                + style_res_mean.repeat(word2phone[i], 1) * style_weight
+            )
+        else:
+            repeat_feature = res[i].repeat(word2phone[i], 1)
+        phone_level_feature.append(repeat_feature)
+
+    phone_level_feature = torch.cat(phone_level_feature, dim=0)
+    return phone_level_feature.T  # [1024, T]
+
+
+def get_model_name_by_lang(lang, args):
+    """根据语言返回对应的 BERT 模型名。"""
+    lang_map = {
+        'ZH': args.chinese_bert,
+        'EN': args.enlish_bert,
+        'JP': args.japanese_bert,
+    }
+    return lang_map[lang] if lang in lang_map else ''
+
+
+def cleaned_text_to_sequence(cleaned_text, tones, language):
+    """音素/声调/语言 → id 序列。"""
+    phones = [_symbol_to_id[symbol] for symbol in cleaned_text]
+    tone_start = language_tone_start_map[language]
+    tones = [i + tone_start for i in tones]
+    lang_id = language_id_map[language]
+    lang_ids = [lang_id for i in phones]
+    return phones, tones, lang_ids
+
+
+def clean_text(model_name, text, language):
+    """完整的文本前处理入口：规范化 + G2P。"""
+    language_module = language_module_map[language]
+    norm_text = language_module.text_normalize(text)
+    phones, tones, word2ph = language_module.g2p(model_name, norm_text)
+    return norm_text, phones, tones, word2ph
+```
+
+**要点：**
+1. **三路 BERT 特征**：推理时只有目标语言使用真实 BERT 模型，另外两路传随机噪声 `randn(1024, len(phone))` 作为占位，与训练侧缺失 `*_bert.pt` 时的兜底逻辑一致。
+2. **add_blank**：如果配置开启，会在音素之间插入空白音素 `0`，`word2ph` 同步翻倍，这是 BV2 对齐机制的约定。
+3. **声调偏移**：不同语言的声调 id 有不同的偏移量（`language_tone_start_map`），避免多语言声调 id 冲突。
 
 ### 4.2 第二步：合成（`SynthesizerTrn.infer`）
 
@@ -1645,7 +2209,7 @@ $$w = \mathrm{ceil}\!\big(\exp(\lambda \cdot \mathrm{SDP}_{rev} + (1-\lambda) \c
 
 其中 $\lambda$ = `sdp_ratio`（默认 0.2），$L$ = `length_scale`（语速，>1 慢、<1 快）。
 
-下面是一个完整推理流程的 Python 示例（对应 `infer.py` 实际实现），可直接拿来跑通：
+#### 完整推理代码（对应 `infer.py` 实际实现）
 
 ```python
 import json
@@ -1792,14 +2356,25 @@ if __name__ == "__main__":
 
 ### 4.3 推理参数语义
 
-| 参数 | 默认值 | 含义 |
-|------|--------|------|
-| `--sdp_ratio` | 0.2 | 随机时长 SDP 与确定时长 DP 的混合比；0=纯 DP，1=纯 SDP |
-| `--noise_scale` | 0.6 | 先验采样噪声幅度；越大越随机，可能越不稳 |
-| `--noise_scale_w` | 0.8 | 时长预测采样噪声（仅 SDP 路径用） |
-| `--length_scale` | 1.0 | 语速缩放；>1 语速放慢、<1 变快 |
+| 参数 | 默认值 | 含义 | 调整建议 |
+|------|--------|------|---------|
+| `--sdp_ratio` | 0.2 | 随机时长 SDP 与确定时长 DP 的混合比；0=纯 DP，1=纯 SDP | 想要更自然多样调大，想要更稳定调小 |
+| `--noise_scale` | 0.6 | 先验采样噪声幅度；越大越随机，可能越不稳 | 想要更多语气变化调大，想要更稳调小 |
+| `--noise_scale_w` | 0.8 | 时长预测采样噪声（仅 SDP 路径用） | 控制时长预测的随机性 |
+| `--length_scale` | 1.0 | 语速缩放；>1 语速放慢、<1 变快 | 语音太快调大，太慢调小 |
 
 调这些参数可以在不重新训练的情况下，改变合成语音的“感觉”：比如想让语音更慢，把 `length_scale` 调到 1.2；想让语气更多样，把 `noise_scale` 调大一点。
+
+### 4.4 常见问题排查
+
+| 现象 | 可能原因 | 解决办法 |
+|------|---------|---------|
+| 合成音频有严重噪音/爆音 | `noise_scale` 过大，或 `length_scale` 极端 | 调小 `noise_scale`（如 0.3~0.6），将 `length_scale` 回到 0.8~1.5 |
+| 语音语速异快/异慢 | `length_scale` 设置不当 | 根据需要调整 `length_scale`，>1 放慢，<1 加快 |
+| BERT 特征长度与音素不匹配断言失败 | 训练与推理的 `add_blank` 不一致 | 确保训练和推理使用相同的 `config.json` 中的 `data.add_blank` |
+| 只有沙沙声，无清晰语音 | 模型未收敛，或检查点加载错误 | 使用更晚的检查点（如 `G_30000.pth`），确保配置与训练时一致 |
+| 推理极慢（CPU） | 未启用 GPU，或模型较大 | 尽量使用 GPU；可调用 `net_g.remove_weight_norm()` 加速 |
+| 多语言混读（中文念出英文音素等） | 语言 id 与 BERT 模型不匹配 | 确保 `-l` 语言参数与实际文本语言一致，且对应的 `-cb`/`-eb`/`-jb` 模型正确 |
 
 ---
 
