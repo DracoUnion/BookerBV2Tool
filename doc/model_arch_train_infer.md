@@ -12,9 +12,20 @@
 
 `BookerBV2Tool` 则是围绕 BV2 做的一整套工具链，把“一段视频/音频”变成“可训练的克隆模型”，再把文本合成语音。它的全流程是：
 
-```
-视频/音频 ──► 切片(slice) ─► 重采样(resample) ─► 转写(mark) ─► 标注列表(mklist)
-      ─► 预处理(preproc) ─► BERT特征(bert-gen) ─► 训练(train) ─► 合成(infer)
+```mermaid
+flowchart LR
+    A[视频/音频] -->|(1) slice 按静音切分| B[语音片段 WAV]
+    B -->|(2) resample 统一采样率| C[44100 Hz WAV]
+    C -->|(3) mark SenseVoice 转写| D[WAV + *.wav.txt]
+    D -->|(4) mklist 汇总标注| E[speaker_list.json]
+    E -->|(5) preproc 清洗/划分/写配置| F[train/val_list.json + config.json]
+    F -->|(6) bert-gen 生成 BERT 特征| G[*_bert.pt 带特征的数据]
+    G -->|(7) train 训练模型| H[模型权重 G_*.pth 等]
+    H -->|(8) infer 文本转语音| I[合成音频 WAV]
+
+    style A fill:#e1f5fe,stroke:#01579b
+    style I fill:#e8f5e9,stroke:#1b5e20
+    style H fill:#fff8e1,stroke:#f57f17
 ```
 
 前六步全是“造数据”，最后两步才是“真正跑模型”。本文重点讲最后三步的核心——模型架构、训练流程、推理流程，同时会简要提一下前面怎么产出训练所需的数据，让你有完整印象。
@@ -25,34 +36,90 @@
 
 BV2 的核心模型叫 `SynthesizerTrn`，它是一个 **VITS 风格的条件 VAE + 声码器**。用大白话讲：它既是一个“变分自编码器”（VAE，学习把声音压缩成隐藏变量、再解压出来），又是一个“声码器”（把隐藏变量还原成可听的波形）。模型由 **五大子网络** 组成，外加一组 **判别器** 负责对抗训练，让生出来的声音更真实。
 
-下面是模型的端到端拓扑（简化版）：
+下面是模型的端到端拓扑（用 mermaid 流程图展示）：
 
-```
-音素序列(+声调+语言) + 三语 BERT 特征
-        │
-        ▼
- ┌─────────────────┐
- │ TextEncoder     │ 文本编码器：把音素/声调/语言/BERT 编码成
- │ (Transformer)   │ 文本隐藏特征 + 先验分布 N(m_p, logs_p)
- └───────┬─────────┘
-         │ x, m_p, logs_p
-         ▼
- ┌─────────────────┐      ┌────────────────────┐
- │ 时长预测器        │      │ PosteriorEncoder   │ 音频编码器：把线性谱
- │ (SDP 随机 + DP    │      │ (WaveNet 后验)     │ 编码成后验分布，采样 z
- │ 确定性)         │      └─────────┬──────────┘
- └───────┬─────────┘                │ z
-         │ w (时长)                 ▼
-         ▼              ┌────────────────────┐
- ┌─────────────────────►│ Flow (先验对流)    │◄──── z (训练期参考)
- │ MAS 单调对齐搜索      │ (可逆耦合流+Flip)  │      (推理期逆向用)
- │ (找出音素-频谱帧对齐) │                    │
- └─────────┬────────────┘                    │
-           │ z_p                              ▼
-           ▼              ┌────────────────────┐
- ┌─────────────────────►│ Generator (HiFi-GAN)│───► 合成波形 y_hat
- │ 说话人嵌入 g          │ (反卷积上采样+残差块)│
- └───────────────────────┴────────────────────┘
+```mermaid
+flowchart TB
+    subgraph 输入层
+    X[音素 x + 声调 tone + 语言 language]:::input
+    BERT[三语 BERT 特征<br/>bert / ja_bert / en_bert]:::input
+    SPEC[线性频谱 spec<br/>训练期参考]:::input
+    SID[说话人 id sid]:::input
+    end
+
+    subgraph 文本编码器 TextEncoder
+    EMB[音素/声调/语言嵌入<br/>+ 三路 BERT 投影]:::enc
+    TRANS[6层 Transformer<br/>相对位置注意力]:::enc
+    PROJ[Conv1d 输出投影<br/>拆分 m_p / logs_p]:::enc
+    end
+
+    subgraph 后验编码器 PosteriorEncoder
+    PRE[Conv1d 1025→192]:::encq
+    WN[16层 WaveNet 卷积]:::encq
+    QPROJ[Conv1d 输出 m_q / logs_q]:::encq
+    SAMPLE[重参数化采样 z]:::encq
+    end
+
+    subgraph 时长预测器
+    SDP[SDP 随机时长<br/>6段标准化流]:::dur
+    DP[DP 确定性时长<br/>Conv1d+LN+ReLU]:::dur
+    end
+
+    subgraph MAS 对齐
+    MAS[MAS 单调对齐搜索<br/>numba 动态规划]:::mas
+    end
+
+    subgraph 先验对流 Flow
+    FLOW[Transformer 耦合流<br/>耦合层 + Flip ×4]:::flow
+    end
+
+    subgraph 声码器 Generator HiFi-GAN
+    UP[5级反卷积上采样<br/>8×8×2×2×2=512]:::gen
+    RES[多核残差块<br/>核 3/7/11]:::gen
+    OUT[Conv1d + tanh → 波形]:::gen
+    end
+
+    subgraph 判别器集合
+    MPD[MPD 多周期判别器]:::disc
+    DUR[时长判别器<br/>双向 LSTM]:::disc
+    WAVLM[WavLM 判别器<br/>SLM 语义判别]:::disc
+    end
+
+    X --> EMB
+    BERT --> EMB
+    EMB --> TRANS
+    TRANS --> PROJ
+    PROJ -.->|先验 m_p/logs_p| MAS
+    SPEC --> PRE
+    PRE --> WN
+    WN --> QPROJ
+    QPROJ --> SAMPLE
+    SAMPLE -->|z| FLOW
+    FLOW -.->|z_p 训练期| MAS
+    MAS -->|w 时长| SDP
+    MAS -->|w 时长| DP
+    SDP -.->|混合 logw| FLOW
+    DP -.->|混合 logw| FLOW
+    FLOW -->|z_p| UP
+    SID --> UP
+    UP --> RES
+    RES --> OUT
+    OUT --> Y[合成波形 y_hat]:::output
+
+    MPD -.->|对抗损失| Y
+    DUR -.->|时长对抗| SDP
+    DUR -.->|时长对抗| DP
+    WAVLM -.->|语义对抗| Y
+
+    classDef input fill:#e1f5fe,stroke:#01579b
+    classDef enc fill:#f3e5f5,stroke:#4a148c
+    classDef encq fill:#e8f5e9,stroke:#1b5e20
+    classDef dur fill:#fff3e0,stroke:#e65100
+    classDef mas fill:#fce4ec,stroke:#880e4f
+    classDef flow fill:#e0f7fa,stroke:#006064
+    classDef gen fill:#fff8e1,stroke:#f57f17
+    classDef disc fill:#ffebee,stroke:#b71c1c
+    classDef output fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
 ```
 
 ### 2.1 输入是什么？
@@ -189,15 +256,59 @@ BV2 采用对抗训练，生成器试图“骗过”判别器，判别器试图�
 1. 读音频，归一化到 `audio / 32768.0`，校验采样率必须等于配置里的 `data.sampling_rate`（通常 44100）。
 2. 惰性计算线性频谱：优先读 `.spec.pt` 缓存，没有就用 STFT 现场算（2048 点，1025 频率箱，`center=False`）。
 3. 从 `*_bert.pt` 读 BERT 特征；缺失时退回随机向量，保证训练不中断。
-4. `Collate` 按频谱长度降序排列、右侧补零，组成一个 batch；`BucketSampler` 按音频长度分桶，让同一个 batch 里的语音长度尽量接近，减少padding浪费。
+4. `Collate` 按频谱长度降序排列、右侧补零，组成一个 batch；`BucketSampler` 按音频长度分桶，让同一个 batch 里的语音长度尽量接近，减少 padding 浪费。
 
 ### 3.2 训练主循环（一步步看）
 
-每个训练 step 大致分三阶段：
+每个训练 step 大致分三阶段。下面用流程图展示整个训练 step：
+
+```mermaid
+flowchart TD
+    Start([开始 step]) --> LoadBatch[加载一个 batch<br/>x, spec, y, sid, tone, language, bert...]
+    LoadBatch --> AMP1{AMP 混合精度?}
+    AMP1 -->|是| Autocast1[autocast bfloat16]
+    AMP1 -->|否| Normal1[FP32 前向]
+    Autocast1 --> GenFwd[生成器前向 net_g.forward<br/>→ y_hat, attn, z, z_p, logw...]
+    Normal1 --> GenFwd
+    GenFwd --> Mel[计算 mel 谱 y_mel, y_hat_mel<br/>切片音频 y, y_hat]
+
+    subgraph 判别器训练 梯度不回流到生成器
+    MPD1[MPD 判别器<br/>net_d(y, y_hat.detach())]
+    DUR1[时长判别器<br/>net_dur_disc(...detach...)]
+    WAVLM1[WavLM 判别器<br/>wl.discriminator(...detach...)]
+    end
+
+    Mel --> MPD1
+    MPD1 --> LossD[discriminator_loss<br/>优化 optim_d]
+    DUR1 --> LossDUR[耦合损失<br/>优化 optim_dur_disc]
+    WAVLM1 --> LossSLM[SLM 损失<br/>优化 optim_wd]
+
+    subgraph 生成器训练 梯度回流
+    MPD2[MPD 判别器<br/>net_d(y, y_hat) 不 detach]
+    DUR2[时长判别器<br/>不 detach]
+    end
+
+    LossD --> GenTrain[生成器总损失<br/>loss_gen_all = gen+fm+mel+dur+kl+lm+lm_gen(+dur_gen)]
+    LossDUR --> GenTrain
+    LossSLM --> GenTrain
+    MPD2 --> GenTrain
+    DUR2 --> GenTrain
+    GenTrain --> Backward[反向传播 optim_g<br/>scaler.step + scaler.update]
+    Backward --> Log[记录日志 + TensorBoard<br/>每 eval_interval 步验证]
+    Log --> Next{还有 batch?}
+    Next -->|是| LoadBatch
+    Next -->|否| Scheduler[学习率调度器 step()<br/>ExponentialLR 衰减]
+    Scheduler --> End([epoch 结束])
+
+    style Start fill:#f9f,stroke:#333
+    style End fill:#f9f,stroke:#333
+    style GenTrain fill:#fff8e1,stroke:#f57f17
+    style LossD fill:#ffebee,stroke:#b71c1c
+```
 
 #### 第一阶段：生成器前向（AMP 混合精度）
 
-```
+```python
 生成器前向 → o, attn, z, z_p, m_p, logs_p, m_q, logs_q, logw, logw_sdp, ...
 ```
 
@@ -229,6 +340,138 @@ BV2 采用对抗训练，生成器试图“骗过”判别器，判别器试图�
 
 生成器优化器 `optim_g` 做一次反向 + 更新，一个 step 完成。
 
+下面是一个完整训练 step 的 PyTorch 伪代码（对应 `train.py` 中 `train_and_evaluate` 的核心逻辑），可直接参考实际实现：
+
+```python
+import torch
+from torch.nn import functional as F
+from torch.cuda.amp import autocast, GradScaler
+
+from BookerBV2Tool import commons
+from BookerBV2Tool.losses import (
+    generator_loss, discriminator_loss, feature_loss, kl_loss,
+)
+from BookerBV2Tool.mel_processing import mel_spectrogram_torch, spec_to_mel_torch
+
+
+def train_step(batch, net_g, net_d, net_dur_disc, net_wd, wl,
+               optim_g, optim_d, optim_dur_disc, optim_wd,
+               scaler, config, device, amp_enabled, global_step):
+    """一个训练 step 的完整流程（对应 train_and_evaluate 核心逻辑）。"""
+    (x, x_lengths, spec, spec_lengths, y, y_lengths,
+     speakers, tone, language, bert, ja_bert, en_bert) = batch
+
+    # ----- 把数据搬到设备（CPU/GPU） -----
+    x, x_lengths = x.to(device), x_lengths.to(device)
+    spec, spec_lengths = spec.to(device), spec_lengths.to(device)
+    y, y_lengths = y.to(device), y_lengths.to(device)
+    speakers = speakers.to(device)
+    tone = tone.to(device)
+    language = language.to(device)
+    bert, ja_bert, en_bert = bert.to(device), ja_bert.to(device), en_bert.to(device)
+
+    hop = config['data']['hop_length']
+    segment_size = config['train']['segment_size']
+    c_mel = config['train']['c_mel']
+    c_kl = config['train']['c_kl']
+
+    # ---------- 1. 生成器前向（AMP 混合精度）----------
+    with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
+        (y_hat, l_length, attn, ids_slice, x_mask, z_mask,
+         (z, z_p, m_p, logs_p, m_q, logs_q),
+         (hidden_x, logw, logw_, logw_sdp), g) = net_g(
+            x, x_lengths, spec, spec_lengths, speakers,
+            tone, language, bert, ja_bert, en_bert)
+
+    # 把线性谱转成 mel 谱，并切成固定长度片段（用于 loss_mel）
+    mel = spec_to_mel_torch(spec, config['data']['filter_length'],
+                            config['data']['n_mel_channels'],
+                            config['data']['sampling_rate'],
+                            config['data']['mel_fmin'], config['data']['mel_fmax'])
+    y_mel = commons.slice_segments(mel, ids_slice, segment_size // hop)
+    y_hat_mel = mel_spectrogram_torch(y_hat.squeeze(1).float(),
+        config['data']['filter_length'], config['data']['n_mel_channels'],
+        config['data']['sampling_rate'], config['data']['hop_length'],
+        config['data']['win_length'], config['data']['mel_fmin'],
+        config['data']['mel_fmax'])
+    y = commons.slice_segments(y, ids_slice * hop, segment_size)
+
+    # ---------- 2. 判别器训练（梯度不回流到生成器）----------
+    with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
+        y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
+        loss_disc, _, _ = discriminator_loss(y_d_hat_r, y_d_hat_g)
+
+    optim_d.zero_grad()
+    scaler.scale(loss_disc).backward()
+    scaler.unscale_(optim_d)
+    torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=200)
+    scaler.step(optim_d)
+
+    # 时长判别器（如启用，对 SDP 和 DP 各自施加对抗损失）
+    if net_dur_disc is not None:
+        y_dur_hat_r, y_dur_hat_g = net_dur_disc(
+            hidden_x.detach(), x_mask.detach(), logw_.detach(), logw.detach(), g.detach())
+        y_dur_hat_r_sdp, y_dur_hat_g_sdp = net_dur_disc(
+            hidden_x.detach(), x_mask.detach(), logw_.detach(), logw_sdp.detach(), g.detach())
+        loss_dur_disc, _, _ = discriminator_loss(
+            y_dur_hat_r + y_dur_hat_r_sdp,
+            y_dur_hat_g + y_dur_hat_g_sdp)
+
+        optim_dur_disc.zero_grad()
+        scaler.scale(loss_dur_disc).backward()
+        scaler.unscale_(optim_dur_disc)
+        scaler.step(optim_dur_disc)
+
+    # WavLM 判别器（SLM，语义判别；本地无模型时退化为 0）
+    if not isinstance(wl, _NoWavLM):  # _NoWavLM 见 train.py 占位实现
+        with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
+            loss_slm = wl.discriminator(
+                y.detach().squeeze(), y_hat.detach().squeeze()).mean()
+        optim_wd.zero_grad()
+        scaler.scale(loss_slm).backward()
+        scaler.unscale_(optim_wd)
+        scaler.step(optim_wd)
+
+    # ---------- 3. 生成器训练（梯度经生成器回传）----------
+    with autocast(enabled=amp_enabled, dtype=torch.bfloat16):
+        # 不 detach，让梯度能回传到生成器
+        y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
+
+        loss_dur = torch.sum(l_length.float())
+        loss_mel = F.l1_loss(y_mel, y_hat_mel) * c_mel
+        loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * c_kl
+        loss_fm = feature_loss(fmap_r, fmap_g)
+        loss_gen, _ = generator_loss(y_d_hat_g)
+        loss_lm = wl(y.detach().squeeze(), y_hat.squeeze()).mean()
+        loss_lm_gen = wl.generator(y_hat.squeeze())
+
+        # 总生成器损失：对抗 + 特征匹配 + mel + 时长 + KL + 语义
+        loss_gen_all = (loss_gen + loss_fm + loss_mel + loss_dur + loss_kl
+                        + loss_lm + loss_lm_gen)
+        if net_dur_disc is not None:
+            _, y_dur_hat_g = net_dur_disc(hidden_x, x_mask, logw_, logw, g)
+            _, y_dur_hat_g_sdp = net_dur_disc(hidden_x, x_mask, logw_, logw_sdp, g)
+            loss_dur_gen, _ = generator_loss(y_dur_hat_g + y_dur_hat_g_sdp)
+            loss_gen_all = loss_gen_all + loss_dur_gen
+
+    optim_g.zero_grad()
+    scaler.scale(loss_gen_all).backward()
+    scaler.unscale_(optim_g)
+    torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=500)
+    scaler.step(optim_g)
+    scaler.update()
+
+    return {
+        "loss/d/total": loss_disc.item(),
+        "loss/g/total": loss_gen_all.item(),
+        "loss/g/mel": loss_mel.item(),
+        "loss/g/kl": loss_kl.item(),
+        "loss/g/dur": loss_dur.item(),
+        "loss/g/fm": loss_fm.item(),
+        "global_step": global_step,
+    }
+```
+
 ### 3.3 优化器与学习率调度
 
 - 生成器、MPD、时长判别器各用独立的 `AdamW(lr=2e-4, betas=(0.8, 0.99), eps=1e-9)`。
@@ -259,10 +502,33 @@ BookerBV2Tool [-cb 中文BERT] [-eb 英文BERT] [-jb 日文BERT] \
 
 推理不需要判别器，只加载生成器权重 `G_*.pth`，设备自动选择（GPU 优先，否则 CPU）。
 
+下面用流程图展示完整的推理过程：
+
+```mermaid
+flowchart TD
+    Start([推理开始]) --> LoadModel[加载生成器 G_*.pth<br/>get_net_g → SynthesizerTrn.eval()]
+    LoadModel --> Text[文本预处理 get_text<br/>clean_text → 音素/声调/word2ph<br/>cleaned_text_to_sequence → id<br/>add_blank 插空白音素<br/>get_bert_feature 三路 BERT]
+    Text --> EncP[enc_p 编码文本<br/>→ 先验 m_p/logs_p + x_mask]
+    EncP --> Dur[时长预测<br/>logw = SDP×sdp_ratio + DP×(1-sdp_ratio)<br/>w = exp(logw)×mask×length_scale<br/>w_ceil = ceil(w)]
+    Dur --> Path[generate_path 构造单调对齐 attn<br/>m_p/logs_p 铺开到频谱帧]
+    Path --> Sample[先验采样<br/>z_p = m_p + randn×exp(logs_p)×noise_scale]
+    Sample --> FlowRev[逆转流 flow(z_p, reverse=True)<br/>→ 声学隐变量 z]
+    FlowRev --> Gen[HiFi-GAN 解码 dec(z×mask, g)<br/>→ 波形 o]
+    Gen --> Save[soundfile.write 写出 WAV<br/>采样率 data.sampling_rate]
+    Save --> End([合成完成 out.wav])
+
+    style Start fill:#f9f,stroke:#333
+    style End fill:#f9f,stroke:#333
+    style LoadModel fill:#e1f5fe,stroke:#01579b
+    style Text fill:#f3e5f5,stroke:#4a148c
+    style Gen fill:#fff8e1,stroke:#f57f17
+    style Save fill:#e8f5e9,stroke:#1b5e20
+```
+
 ### 4.1 第一步：文本 → 模型输入（`get_text`）
 
 1. 根据目标语言选用对应的 BERT 模型（中文/英文/日文各一套）。
-2. `clean_text`：该语言的文本规范化 + G2P（ grapheme-to-phoneme，字母/汉字转音素），得到音素 `phones`、声调 `tones`、`word2ph`（每个音素对应多少个字符）。
+2. `clean_text`：该语言的文本规范化 + G2P（grapheme-to-phoneme，字母/汉字转音素），得到音素 `phones`、声调 `tones`、`word2ph`（每个音素对应多少个字符）。
 3. `cleaned_text_to_sequence`：音素转 id、声调加语言偏移、分配语言 id。
 4. 如果开启 `add_blank`，在音素之间插入空白音素 `_`（id 0），`word2ph` 同步翻倍——这是 BV2 的一种约定，用于下游对齐。
 5. `get_bert_feature`：对**目标语言**的文本计算 phone 级 BERT 特征；另外两路语言传随机噪声 `randn(1024, len(phone))` 作为占位。这与训练侧缺少 `*_bert.pt` 时的兜底逻辑一致。
@@ -290,6 +556,151 @@ $$w = \mathrm{ceil}\!\big(\exp(\lambda \cdot \mathrm{SDP}_{rev} + (1-\lambda) \c
 
 其中 $\lambda$ = `sdp_ratio`（默认 0.2），$L$ = `length_scale`（语速，>1 慢、<1 快）。
 
+下面是一个完整推理流程的 Python 示例（对应 `infer.py` 实际实现），可直接拿来跑通：
+
+```python
+import json
+import torch
+import soundfile as sf
+
+from BookerBV2Tool import commons, utils
+from BookerBV2Tool.models import SynthesizerTrn
+from BookerBV2Tool.text.cleaner import (
+    clean_text,
+    cleaned_text_to_sequence,
+    get_bert_feature,
+    get_model_name_by_lang,
+)
+from BookerBV2Tool.text.symbols import symbols
+
+latest_version = "2.3"
+
+
+def _device():
+    """选择推理设备：有 CUDA 用 GPU，否则 CPU。"""
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def load_model(model_path: str, config_path: str, device: torch.device):
+    """加载训练好的生成器权重 G_*.pth。"""
+    config = json.loads(open(config_path, encoding="utf-8").read())
+    hps = utils.HParams(**config)
+
+    net_g = SynthesizerTrn(
+        len(symbols),
+        hps.data.filter_length // 2 + 1,
+        hps.train.segment_size // hps.data.hop_length,
+        n_speakers=hps.data.n_speakers,
+        **hps.model,
+    ).to(device)
+    net_g.eval()
+    utils.load_checkpoint(model_path, net_g, None, skip_optimizer=True)
+    return net_g, hps
+
+
+def text_to_inputs(text, language, hps, device, args=None):
+    """把文本转成模型需要的张量输入（对应 infer.get_text）。"""
+    # 1. 选对应语言的 BERT 模型
+    model_name = get_model_name_by_lang(language, args)
+
+    # 2. 文本规范化 + G2P → 音素 / 声调 / word2ph
+    norm_text, phone, tone, word2ph = clean_text(model_name, text, language)
+
+    # 3. 音素/声调/语言 → id
+    phone, tone, language_ids = cleaned_text_to_sequence(phone, tone, language)
+
+    # 4. 如开启 add_blank，插入空白音素（id 0）
+    if hps.data.add_blank:
+        phone = commons.intersperse(phone, 0)
+        tone = commons.intersperse(tone, 0)
+        language_ids = commons.intersperse(language_ids, 0)
+        for i in range(len(word2ph)):
+            word2ph[i] *= 2
+        word2ph[0] += 1
+
+    # 5. 目标语言用真实 BERT，其它两路用随机噪声占位
+    bert_ori = get_bert_feature(model_name, norm_text, word2ph, device)
+    if language == "ZH":
+        bert, ja_bert, en_bert = (
+            bert_ori,
+            torch.randn(1024, len(phone)),
+            torch.randn(1024, len(phone)),
+        )
+    elif language == "JP":
+        bert, ja_bert, en_bert = (
+            torch.randn(1024, len(phone)),
+            bert_ori,
+            torch.randn(1024, len(phone)),
+        )
+    else:  # EN
+        bert, ja_bert, en_bert = (
+            torch.randn(1024, len(phone)),
+            torch.randn(1024, len(phone)),
+            bert_ori,
+        )
+
+    # 加 batch 维度，搬到设备
+    x = torch.LongTensor(phone).to(device).unsqueeze(0)
+    tones = torch.LongTensor(tone).to(device).unsqueeze(0)
+    lang_ids = torch.LongTensor(language_ids).to(device).unsqueeze(0)
+    bert = bert.to(device).unsqueeze(0)
+    ja_bert = ja_bert.to(device).unsqueeze(0)
+    en_bert = en_bert.to(device).unsqueeze(0)
+    x_lengths = torch.LongTensor([x.size(1)]).to(device)
+    sid = torch.LongTensor([hps.data.spk2id["wizard"]]).to(device)
+
+    return x, x_lengths, sid, tones, lang_ids, bert, ja_bert, en_bert
+
+
+def synthesize(net_g, text, language, hps, device,
+               out_path="out.wav",
+               sdp_ratio=0.2, noise_scale=0.6,
+               noise_scale_w=0.8, length_scale=1.0):
+    """文本转语音主流程（对应 infer.infer）。"""
+    args = type("Args", (), {})()  # 简单占位对象
+
+    x, x_lengths, sid, tones, lang_ids, bert, ja_bert, en_bert = text_to_inputs(
+        text, language, hps, device, args
+    )
+
+    with torch.no_grad():
+        audio = (
+            net_g.infer(
+                x,
+                x_lengths,
+                sid,
+                tones,
+                lang_ids,
+                bert,
+                ja_bert,
+                en_bert,
+                sdp_ratio=sdp_ratio,
+                noise_scale=noise_scale,
+                noise_scale_w=noise_scale_w,
+                length_scale=length_scale,
+            )[0][0, 0]
+            .data.cpu()
+            .float()
+            .numpy()
+        )
+
+    sf.write(out_path, audio, hps.data.sampling_rate)
+    print(f"Saved synthesized audio to {out_path}")
+
+
+if __name__ == "__main__":
+    device = _device()
+    net_g, hps = load_model("models/G_3000.pth", "config.json", device)
+    synthesize(
+        net_g,
+        "你好，这是用 Bert-VITS2 合成的语音。",
+        language="ZH",
+        hps=hps,
+        device=device,
+        out_path="out.wav",
+    )
+```
+
 ### 4.3 推理参数语义
 
 | 参数 | 默认值 | 含义 |
@@ -303,7 +714,85 @@ $$w = \mathrm{ceil}\!\big(\exp(\lambda \cdot \mathrm{SDP}_{rev} + (1-\lambda) \c
 
 ---
 
-## 五、数据准备到底造了什么？
+## 五、配置文件 config.json 示例
+
+训练和推理都通过 `config.json` 驱动。下面是一个精简但完整的配置示例（对应 `preproc` 生成的配置模板）：
+
+```json
+{
+  "model": {
+    "inter_channels": 192,
+    "hidden_channels": 192,
+    "filter_channels": 768,
+    "n_heads": 2,
+    "n_layers": 6,
+    "kernel_size": 3,
+    "p_dropout": 0.1,
+    "resblock": "1",
+    "resblock_kernel_sizes": [3, 7, 11],
+    "resblock_dilation_sizes": [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
+    "upsample_rates": [8, 8, 2, 2, 2],
+    "upsample_initial_channel": 512,
+    "upsample_kernel_sizes": [16, 16, 8, 2, 2],
+    "gin_channels": 512,
+    "n_flow_layer": 4,
+    "n_layers_trans_flow": 4,
+    "use_transformer_flow": true,
+    "use_duration_discriminator": true,
+    "use_spk_conditioned_encoder": true,
+    "use_noise_scaled_mas": true,
+    "use_mel_posterior_encoder": false,
+    "slm": {
+      "model": "./slm/wavlm-base-plus",
+      "sr": 16000
+    }
+  },
+  "data": {
+    "training_files": "train_list.json",
+    "validation_files": "val_list.json",
+    "sampling_rate": 44100,
+    "filter_length": 2048,
+    "n_mel_channels": 1025,
+    "hop_length": 512,
+    "win_length": 2048,
+    "mel_fmin": 0,
+    "mel_fmax": 8000,
+    "add_blank": true,
+    "n_speakers": 1,
+    "spk2id": {"wizard": 0},
+    "spec_cache": false
+  },
+  "train": {
+    "seed": 42,
+    "epochs": 1000,
+    "lr": 0.0002,
+    "lr_decay": 0.99995,
+    "c_mel": 45,
+    "c_kl": 1.0,
+    "segment_size": 16384,
+    "bf16_run": true,
+    "skip_optimizer": true,
+    "log_interval": 50,
+    "eval_interval": 500
+  },
+  "train_ms": {
+    "model_dir": "logs/44k",
+    "keep_ckpts": 8
+  },
+  "version": "2.3"
+}
+```
+
+关键字段说明：
+
+- `model.*`：模型架构超参数，如 `inter_channels=192`（隐藏维度）、`upsample_rates=[8,8,2,2,2]`（HiFi-GAN 上采样倍率，总乘积 512 对应帧移 512）。
+- `data.*`：数据与音频参数，如 `sampling_rate=44100`、`hop_length=512`、`add_blank=true`、`spk2id` 说话人表。
+- `train.*`：训练超参数，如 `c_mel=45`（mel 损失系数，较大，说明重建音频保真度是训练核心目标之一）、`lr=2e-4`（学习率）。
+- `train_ms.model_dir`：检查点保存目录，如 `logs/44k`。
+
+---
+
+## 六、数据准备到底造了什么？
 
 虽然本文重点是模型，但理解训练数据从哪来，有助于看懂整个图景。`BookerBV2Tool` 前六步把原始音视频变成训练样本：
 
@@ -320,7 +809,7 @@ $$w = \mathrm{ceil}\!\big(\exp(\lambda \cdot \mathrm{SDP}_{rev} + (1-\lambda) \c
 
 ---
 
-## 六、给入门者的快速总结
+## 七、给入门者的快速总结
 
 1. **模型是什么？** BV2 是一个条件 VAE + HiFi-GAN 声码器，把文本和说话人身份作为条件，端到端生成波形。核心是 `SynthesizerTrn`，含文本编码器、后验编码器、可逆流、时长预测器、声码器，外加三类判别器做对抗训练。
 2. **训练怎么做？** 先生成器前向得到波形和对齐，再训判别器分真假，最后训生成器让它同时在“听起来真实、mel 谱准确、KL 正则、时长准、语义保持”多个目标上取平衡。用 AdamW + 非常缓慢的学习率衰减，支持 bf16 混合精度和断点续跑。
