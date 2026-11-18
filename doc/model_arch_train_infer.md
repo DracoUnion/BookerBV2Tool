@@ -41,48 +41,48 @@ BV2 的核心模型叫 `SynthesizerTrn`，它是一个 **VITS 风格的条件 VA
 ```mermaid
 flowchart TB
     subgraph 输入层
-    X[音素 x + 声调 tone + 语言 language]:::input
-    BERT[三语 BERT 特征<br>bert / ja_bert / en_bert]:::input
-    SPEC[线性频谱 spec<br>训练期参考]:::input
-    SID[说话人 id sid]:::input
+    X["音素 x + 声调 tone + 语言 language"]:::input
+    BERT["三语 BERT 特征<br>bert / ja_bert / en_bert"]:::input
+    SPEC["线性频谱 spec<br>训练期参考"]:::input
+    SID["说话人 id sid"]:::input
     end
 
     subgraph 文本编码器 TextEncoder
-    EMB[音素/声调/语言嵌入<br>+ 三路 BERT 投影]:::enc
-    TRANS[6层 Transformer<br>相对位置注意力]:::enc
-    PROJ[Conv1d 输出投影<br>拆分 m_p / logs_p]:::enc
+    EMB["音素/声调/语言嵌入<br>+ 三路 BERT 投影"]:::enc
+    TRANS["6层 Transformer<br>相对位置注意力"]:::enc
+    PROJ["Conv1d 输出投影<br>拆分 m_p / logs_p"]:::enc
     end
 
     subgraph 后验编码器 PosteriorEncoder
-    PRE[Conv1d 1025→192]:::encq
-    WN[16层 WaveNet 卷积]:::encq
-    QPROJ[Conv1d 输出 m_q / logs_q]:::encq
-    SAMPLE[重参数化采样 z]:::encq
+    PRE["Conv1d 1025→192"]:::encq
+    WN["16层 WaveNet 卷积"]:::encq
+    QPROJ["Conv1d 输出 m_q / logs_q"]:::encq
+    SAMPLE["重参数化采样 z"]:::encq
     end
 
     subgraph 时长预测器
-    SDP[SDP 随机时长<br>6段标准化流]:::dur
-    DP[DP 确定性时长<br>Conv1d+LN+ReLU]:::dur
+    SDP["SDP 随机时长<br>6段标准化流"]:::dur
+    DP["DP 确定性时长<br>Conv1d+LN+ReLU"]:::dur
     end
 
     subgraph MAS 对齐
-    MAS[MAS 单调对齐搜索<br>numba 动态规划]:::mas
+    MAS["MAS 单调对齐搜索<br>numba 动态规划"]:::mas
     end
 
     subgraph 先验对流 Flow
-    FLOW[Transformer 耦合流<br>耦合层 + Flip ×4]:::flow
+    FLOW["Transformer 耦合流<br>耦合层 + Flip ×4"]:::flow
     end
 
     subgraph 声码器 Generator HiFi-GAN
-    UP[5级反卷积上采样<br>8×8×2×2×2=512]:::gen
-    RES[多核残差块<br>核 3/7/11]:::gen
-    OUT[Conv1d + tanh → 波形]:::gen
+    UP["5级反卷积上采样<br>8×8×2×2×2=512"]:::gen
+    RES["多核残差块<br>核 3/7/11"]:::gen
+    OUT["Conv1d + tanh → 波形"]:::gen
     end
 
     subgraph 判别器集合
-    MPD[MPD 多周期判别器]:::disc
-    DUR[时长判别器<br>双向 LSTM]:::disc
-    WAVLM[WavLM 判别器<br>SLM 语义判别]:::disc
+    MPD["MPD 多周期判别器"]:::disc
+    DUR["时长判别器<br>双向 LSTM"]:::disc
+    WAVLM["WavLM 判别器<br>SLM 语义判别"]:::disc
     end
 
     X --> EMB
@@ -165,20 +165,20 @@ flowchart TB
     end
 
     subgraph 嵌入与投影
-    emb[音素嵌入 emb<br>nn.Embedding(112, 192)]:::mod
-    tone_emb[声调嵌入 tone_emb<br>nn.Embedding(12, 192)]:::mod
-    lang_emb[语言嵌入 language_emb<br>nn.Embedding(3, 192)]:::mod
-    bert_proj[中文 BERT 投影 bert_proj<br>Conv1d(1024→192)]:::mod
-    ja_proj[日文 BERT 投影 ja_bert_proj<br>Conv1d(1024→192)]:::mod
-    en_proj[英文 BERT 投影 en_bert_proj<br>Conv1d(1024→192)]:::mod
+    emb["音素嵌入 emb<br>nn.Embedding(112, 192)"]:::mod
+    tone_emb["声调嵌入 tone_emb<br>nn.Embedding(12, 192)"]:::mod
+    lang_emb["语言嵌入 language_emb<br>nn.Embedding(3, 192)"]:::mod
+    bert_proj["中文 BERT 投影 bert_proj<br>Conv1d(1024→192)"]:::mod
+    ja_proj["日文 BERT 投影 ja_bert_proj<br>Conv1d(1024→192)"]:::mod
+    en_proj["英文 BERT 投影 en_bert_proj<br>Conv1d(1024→192)"]:::mod
     end
 
     subgraph Transformer 编码器
-    enc[6 层 Transformer Encoder<br>MultiHeadAttention + FFN + LayerNorm<br>相对位置注意力 window=4]:::mod
+    enc["6 层 Transformer Encoder<br>MultiHeadAttention + FFN + LayerNorm<br>相对位置注意力 window=4"]:::mod
     end
 
     subgraph 输出投影
-    proj[输出投影 proj<br>Conv1d(192→384)<br>拆分 m_p / logs_p]:::mod
+    proj["输出投影 proj<br>Conv1d(192→384)<br>拆分 m_p / logs_p"]:::mod
     end
 
     x --> emb
@@ -304,14 +304,14 @@ flowchart TB
     end
 
     subgraph 编码
-    pre[前置投影 pre<br>Conv1d(1025→192)]:::mod
-    enc[16 层 WaveNet 卷积 enc<br>门控 tanh + 扩散卷积<br>带说话人条件通道]:::mod
-    proj[统计投影 proj<br>Conv1d(192→384)]:::mod
+    pre["前置投影 pre<br>Conv1d(1025→192)"]:::mod
+    enc["16 层 WaveNet 卷积 enc<br>门控 tanh + 扩散卷积<br>带说话人条件通道"]:::mod
+    proj["统计投影 proj<br>Conv1d(192→384)"]:::mod
     end
 
     subgraph 输出
-    split[拆分 m_q / logs_q<br>各 [B, 192, T']]:::mod
-    sample[重参数化采样<br>z = m_q + randn × exp(logs_q)]:::mod
+    split["拆分 m_q / logs_q<br>各 [B, 192, T']"]:::mod
+    sample["重参数化采样<br>z = m_q + randn × exp(logs_q)"]:::mod
     end
 
     spec --> pre
@@ -393,18 +393,18 @@ flowchart TB
     end
 
     subgraph 4 层耦合流
-    f1[TransformerCouplingLayer 1<br>+ Flip]:::mod
-    f2[TransformerCouplingLayer 2<br>+ Flip]:::mod
-    f3[TransformerCouplingLayer 3<br>+ Flip]:::mod
-    f4[TransformerCouplingLayer 4<br>+ Flip]:::mod
+    f1["TransformerCouplingLayer 1<br>+ Flip"]:::mod
+    f2["TransformerCouplingLayer 2<br>+ Flip"]:::mod
+    f3["TransformerCouplingLayer 3<br>+ Flip"]:::mod
+    f4["TransformerCouplingLayer 4<br>+ Flip"]:::mod
     end
 
     subgraph 单层耦合层内部
-    split[通道对分割 x0 / x1]:::mod
-    pre[Conv1d 平移]:::mod
-    enc[Transformer Encoder<br>isflow=True, 4 层]:::mod
-    post[Conv1d 输出 m<br>mean_only=True]:::mod
-    combine[通道拼接 x0 / x1]:::mod
+    split["通道对分割 x0 / x1"]:::mod
+    pre["Conv1d 平移"]:::mod
+    enc["Transformer Encoder<br>isflow=True, 4 层"]:::mod
+    post["Conv1d 输出 m<br>mean_only=True"]:::mod
+    combine["通道拼接 x0 / x1"]:::mod
     end
 
     z --> f1 --> f2 --> f3 --> f4
@@ -527,21 +527,21 @@ flowchart TB
     x["文本隐藏特征 x<br>[B, 192, T]"]:::in
     x_mask["文本掩码 x_mask<br>[B, 1, T]"]:::in
     g["说话人条件 g<br>[B, 512, 1]"]:::cond
-    w[真实时长 w<br>仅训练期]:::in
+    w["真实时长 w<br>仅训练期"]:::in
     end
 
     subgraph SDP 随机时长预测器
-    sdp_pre[pre Conv1d]:::mod
-    sdp_convs[DDSConv 3 层]:::mod
-    sdp_proj[proj Conv1d]:::mod
-    sdp_flows[6 段标准化流<br>ElementwiseAffine + ConvFlow + Flip]:::mod
-    sdp_log_flow[Log 流]:::mod
+    sdp_pre["pre Conv1d"]:::mod
+    sdp_convs["DDSConv 3 层"]:::mod
+    sdp_proj["proj Conv1d"]:::mod
+    sdp_flows["6 段标准化流<br>ElementwiseAffine + ConvFlow + Flip"]:::mod
+    sdp_log_flow["Log 流"]:::mod
     end
 
     subgraph DP 确定性时长预测器
-    dp_conv1[Conv1d + ReLU + LayerNorm]:::mod
-    dp_conv2[Conv1d + ReLU + LayerNorm]:::mod
-    dp_proj[Conv1d → 1]:::mod
+    dp_conv1["Conv1d + ReLU + LayerNorm"]:::mod
+    dp_conv2["Conv1d + ReLU + LayerNorm"]:::mod
+    dp_proj["Conv1d → 1"]:::mod
     end
 
     subgraph 输出
@@ -681,24 +681,24 @@ flowchart TB
     m_p["先验均值 m_p<br>[B, 192, T_s]"]:::in
     logs_p["先验对数标准差 logs_p<br>[B, 192, T_s]"]:::in
     z_p["先验流输出 z_p<br>[B, 192, T_t]"]:::in
-    x_mask[文本掩码]:::in
-    y_mask[频谱掩码]:::in
+    x_mask["文本掩码"]:::in
+    y_mask["频谱掩码"]:::in
     end
 
     subgraph 构造负交叉熵打分矩阵 neg_cent
-    s_p_sq_r[exp(-2 × logs_p)]:::mod
-    neg_cent1[-0.5 × log(2π) - logs_p]:::mod
-    neg_cent2[-0.5 × z_p² · s_p_sq_r]:::mod
-    neg_cent3[z_p · (m_p × s_p_sq_r)]:::mod
-    neg_cent4[-0.5 × m_p² × s_p_sq_r]:::mod
+    s_p_sq_r["exp(-2 × logs_p)"]:::mod
+    neg_cent1["-0.5 × log(2π) - logs_p"]:::mod
+    neg_cent2["-0.5 × z_p² · s_p_sq_r"]:::mod
+    neg_cent3["z_p · (m_p × s_p_sq_r)"]:::mod
+    neg_cent4["-0.5 × m_p² × s_p_sq_r"]:::mod
     end
 
     subgraph 可选噪声缩放
-    noise[高斯噪声 ε<br>噪声随步数线性衰减]:::mod
+    noise["高斯噪声 ε<br>噪声随步数线性衰减"]:::mod
     end
 
     subgraph 单调动态规划（numba JIT）
-    max_path[maximum_path<br>value[y,x] += max(prev_cur, prev_up)<br>严格单调 x ≥ y]:::mod
+    max_path["maximum_path<br>value[y,x] += max(prev_cur, prev_up)<br>严格单调 x ≥ y"]:::mod
     end
 
     subgraph 输出
@@ -756,24 +756,24 @@ flowchart TB
     end
 
     subgraph 初始投影
-    conv_pre[conv_pre<br>Conv1d(192→512, k=7)]:::mod
+    conv_pre["conv_pre<br>Conv1d(192→512, k=7)"]:::mod
     end
 
     subgraph 5 级上采样 + 残差块
-    up1[上采样 1 ×8<br>ConvTranspose1d<br>+ LeakyReLU]:::mod
-    res1[残差块核 3/7/11<br>输出求平均]:::mod
-    up2[上采样 2 ×8<br>ConvTranspose1d<br>+ LeakyReLU]:::mod
-    res2[残差块核 3/7/11<br>输出求平均]:::mod
-    up3[上采样 3 ×2<br>ConvTranspose1d<br>+ LeakyReLU]:::mod
-    res3[残差块核 3/7/11<br>输出求平均]:::mod
-    up4[上采样 4 ×2<br>ConvTranspose1d<br>+ LeakyReLU]:::mod
-    res4[残差块核 3/7/11<br>输出求平均]:::mod
-    up5[上采样 5 ×2<br>ConvTranspose1d<br>+ LeakyReLU]:::mod
-    res5[残差块核 3/7/11<br>输出求平均]:::mod
+    up1["上采样 1 ×8<br>ConvTranspose1d<br>+ LeakyReLU"]:::mod
+    res1["残差块核 3/7/11<br>输出求平均"]:::mod
+    up2["上采样 2 ×8<br>ConvTranspose1d<br>+ LeakyReLU"]:::mod
+    res2["残差块核 3/7/11<br>输出求平均"]:::mod
+    up3["上采样 3 ×2<br>ConvTranspose1d<br>+ LeakyReLU"]:::mod
+    res3["残差块核 3/7/11<br>输出求平均"]:::mod
+    up4["上采样 4 ×2<br>ConvTranspose1d<br>+ LeakyReLU"]:::mod
+    res4["残差块核 3/7/11<br>输出求平均"]:::mod
+    up5["上采样 5 ×2<br>ConvTranspose1d<br>+ LeakyReLU"]:::mod
+    res5["残差块核 3/7/11<br>输出求平均"]:::mod
     end
 
     subgraph 输出
-    conv_post[conv_post<br>Conv1d(ch→1, k=7)<br>+ tanh]:::mod
+    conv_post["conv_post<br>Conv1d(ch→1, k=7)<br>+ tanh"]:::mod
     end
 
     z --> conv_pre
@@ -883,28 +883,28 @@ flowchart TB
     end
 
     subgraph MPD 多周期判别器
-    discS[DiscriminatorS<br>1D 卷积<br>16→64→256→1024→1]:::mod
-    discP2[DiscriminatorP period=2]:::mod
-    discP3[DiscriminatorP period=3]:::mod
-    discP5[DiscriminatorP period=5]:::mod
-    discP7[DiscriminatorP period=7]:::mod
-    discP11[DiscriminatorP period=11]:::mod
+    discS["DiscriminatorS<br>1D 卷积<br>16→64→256→1024→1"]:::mod
+    discP2["DiscriminatorP period=2"]:::mod
+    discP3["DiscriminatorP period=3"]:::mod
+    discP5["DiscriminatorP period=5"]:::mod
+    discP7["DiscriminatorP period=7"]:::mod
+    discP11["DiscriminatorP period=11"]:::mod
     end
 
     subgraph 时长判别器 DUR（VITS2 特色）
-    dur_lstm[双向 LSTM<br>2 层卷积 + dur_proj<br>→ Sigmoid]:::mod
+    dur_lstm["双向 LSTM<br>2 层卷积 + dur_proj<br>→ Sigmoid"]:::mod
     end
 
     subgraph WavLM 判别器 WD（SLM）
-    wavlm_pre[Conv1d(9984→64)<br>13 层 WavLM 隐藏态堆叠]:::mod
-    wavlm_conv[3 层 Conv1d<br>64→128→256→256]:::mod
-    wavlm_post[Conv1d→1 Logit]:::mod
+    wavlm_pre["Conv1d(9984→64)<br>13 层 WavLM 隐藏态堆叠"]:::mod
+    wavlm_conv["3 层 Conv1d<br>64→128→256→256"]:::mod
+    wavlm_post["Conv1d→1 Logit"]:::mod
     end
 
     subgraph 输出
-    d_r[真实分数]:::out
-    d_g[生成分数]:::out
-    fmap[特征图 fmap<br>用于特征匹配损失]:::out
+    d_r["真实分数"]:::out
+    d_g["生成分数"]:::out
+    fmap["特征图 fmap<br>用于特征匹配损失"]:::out
     end
 
     y --> discS
@@ -1133,36 +1133,36 @@ class WavLMDiscriminator(nn.Module):
 ```mermaid
 flowchart TB
     subgraph 初始化 __init__
-    emb_g[说话人嵌入 emb_g<br>nn.Embedding(n_speakers, gin_channels)]:::mod
-    enc_p[TextEncoder 文本编码器]:::mod
-    dec[Generator HiFi-GAN 声码器]:::mod
-    enc_q[PosteriorEncoder 后验编码器]:::mod
-    flow[TransformerCouplingBlock 先验对流]:::mod
-    sdp[StochasticDurationPredictor 随机时长]:::mod
-    dp[DurationPredictor 确定性时长]:::mod
+    emb_g["说话人嵌入 emb_g<br>nn.Embedding(n_speakers, gin_channels)"]:::mod
+    enc_p["TextEncoder 文本编码器"]:::mod
+    dec["Generator HiFi-GAN 声码器"]:::mod
+    enc_q["PosteriorEncoder 后验编码器"]:::mod
+    flow["TransformerCouplingBlock 先验对流"]:::mod
+    sdp["StochasticDurationPredictor 随机时长"]:::mod
+    dp["DurationPredictor 确定性时长"]:::mod
     end
 
     subgraph 训练前向 forward
-    g[获取说话人嵌入 g]:::mod
-    enc_p_fwd[enc_p → x, m_p, logs_p, x_mask]:::mod
-    enc_q_fwd[enc_q → z, m_q, logs_q, y_mask]:::mod
-    flow_fwd[flow(z) → z_p]:::mod
-    mas[MAS 单调对齐 → attn, w]:::mod
-    sdp_fwd[SDP NLL + 时长 MSE]:::mod
-    dp_fwd[DP 时长 MSE]:::mod
-    align[attn 铺开 m_p/logs_p 到频谱帧]:::mod
-    slice[随机切片 z_slice]:::mod
-    dec_fwd[dec(z_slice, g) → o]:::mod
+    g["获取说话人嵌入 g"]:::mod
+    enc_p_fwd["enc_p → x, m_p, logs_p, x_mask"]:::mod
+    enc_q_fwd["enc_q → z, m_q, logs_q, y_mask"]:::mod
+    flow_fwd["flow(z) → z_p"]:::mod
+    mas["MAS 单调对齐 → attn, w"]:::mod
+    sdp_fwd["SDP NLL + 时长 MSE"]:::mod
+    dp_fwd["DP 时长 MSE"]:::mod
+    align["attn 铺开 m_p/logs_p 到频谱帧"]:::mod
+    slice["随机切片 z_slice"]:::mod
+    dec_fwd["dec(z_slice, g) → o"]:::mod
     end
 
     subgraph 推理前向 infer
-    enc_p_inf[enc_p → m_p/logs_p]:::mod
-    dur_inf[SDP/DP 混合 → logw → w_ceil]:::mod
-    path[generate_path → attn]:::mod
-    align_inf[attn 铺开先验]:::mod
-    sample[先验采样 z_p = m_p + randn×exp(logs_p)×noise_scale]:::mod
-    flow_rev[flow(z_p, reverse=True) → z]:::mod
-    dec_inf[dec(z × y_mask, g) → 波形]:::mod
+    enc_p_inf["enc_p → m_p/logs_p"]:::mod
+    dur_inf["SDP/DP 混合 → logw → w_ceil"]:::mod
+    path["generate_path → attn"]:::mod
+    align_inf["attn 铺开先验"]:::mod
+    sample["先验采样 z_p = m_p + randn×exp(logs_p)×noise_scale"]:::mod
+    flow_rev["flow(z_p, reverse=True) → z"]:::mod
+    dec_inf["dec(z × y_mask, g) → 波形"]:::mod
     end
 
     emb_g --> g
@@ -1337,37 +1337,37 @@ class SynthesizerTrn(nn.Module):
 ```mermaid
 flowchart TB
     subgraph 数据准备
-    Loader[TextAudioSpeakerLoader<br>读取 wav/phones/tone/bert/sid]:::data
-    Collate[TextAudioSpeakerCollate<br>按 spec 长度降序排列 + 右侧 padding]:::data
-    Bucket[DistributedBucketSampler<br>按音频长度分桶<br>减少 padding 浪费]:::data
+    Loader["TextAudioSpeakerLoader<br>读取 wav/phones/tone/bert/sid"]:::data
+    Collate["TextAudioSpeakerCollate<br>按 spec 长度降序排列 + 右侧 padding"]:::data
+    Bucket["DistributedBucketSampler<br>按音频长度分桶<br>减少 padding 浪费"]:::data
     end
 
     subgraph 生成器前向 AMP
-    Autocast[autocast bfloat16]:::amp
-    GenFwd[SynthesizerTrn.forward<br>→ y_hat, attn, z, z_p, logw...]:::amp
-    Mel[spec_to_mel_torch + mel_spectrogram_torch<br>切片 y_mel / y_hat_mel / y]:::amp
+    Autocast["autocast bfloat16"]:::amp
+    GenFwd["SynthesizerTrn.forward<br>→ y_hat, attn, z, z_p, logw..."]:::amp
+    Mel["spec_to_mel_torch + mel_spectrogram_torch<br>切片 y_mel / y_hat_mel / y"]:::amp
     end
 
     subgraph 判别器训练 梯度不回流到生成器
-    MPD[MPD net_d(y, y_hat.detach())]:::disc
-    LossD[discriminator_loss<br>优化 optim_d]:::disc
-    DUR[时长判别器 net_dur_disc<br>SDP + DP 两对]:::disc
-    LossDUR[优化 optim_dur_disc]:::disc
-    WAVLM[WavLM 判别器 wl.discriminator]:::disc
-    LossSLM[优化 optim_wd]:::disc
+    MPD["MPD net_d(y, y_hat.detach())"]:::disc
+    LossD["discriminator_loss<br>优化 optim_d"]:::disc
+    DUR["时长判别器 net_dur_disc<br>SDP + DP 两对"]:::disc
+    LossDUR["优化 optim_dur_disc"]:::disc
+    WAVLM["WavLM 判别器 wl.discriminator"]:::disc
+    LossSLM["优化 optim_wd"]:::disc
     end
 
     subgraph 生成器训练 梯度回流
-    MPD2[MPD net_d(y, y_hat) 不 detach]:::gen
-    DUR2[时长判别器 不 detach]:::gen
-    GenLoss[总损失 loss_gen_all<br>gen + fm + mel + dur + kl + lm + lm_gen]:::gen
-    Backward[optim_g 反向 + scaler.step/update]:::gen
+    MPD2["MPD net_d(y, y_hat) 不 detach"]:::gen
+    DUR2["时长判别器 不 detach"]:::gen
+    GenLoss["总损失 loss_gen_all<br>gen + fm + mel + dur + kl + lm + lm_gen"]:::gen
+    Backward["optim_g 反向 + scaler.step/update"]:::gen
     end
 
     subgraph 日志与检查点
-    Log[TensorBoard 标量 + 图像<br>loss/g/*, loss/d/*, grad_norm 等]:::log
-    Eval[eval_interval 步验证集推理<br>sdp_ratio=0 和 =1]:::log
-    Ckpt[保存 G/D/WD/DUR_*.pth<br>clean_checkpoints 清理旧文件]:::log
+    Log["TensorBoard 标量 + 图像<br>loss/g/*, loss/d/*, grad_norm 等"]:::log
+    Eval["eval_interval 步验证集推理<br>sdp_ratio=0 和 =1"]:::log
+    Ckpt["保存 G/D/WD/DUR_*.pth<br>clean_checkpoints 清理旧文件"]:::log
     end
 
     Loader --> Collate --> Bucket --> Autocast
@@ -1404,23 +1404,23 @@ flowchart TB
 ```mermaid
 flowchart TB
     subgraph 数据集 TextAudioSpeakerLoader
-    LoadList[load_filepaths_and_text<br>按 | 分隔读取列表]:::ds
-    Shuffle[random.shuffle 随机打乱]:::ds
+    LoadList["load_filepaths_and_text<br>按 | 分隔读取列表"]:::ds
+    Shuffle["random.shuffle 随机打乱"]:::ds
     Filter["_filter()<br>过滤 phones 长度不在 [1,384] 的样本"]:::ds
-    GetPair[get_audio_text_speaker_pair<br>get_text + get_audio + sid]:::ds
+    GetPair["get_audio_text_speaker_pair<br>get_text + get_audio + sid"]:::ds
     end
 
     subgraph 文本处理 get_text
-    CleanedSeq[cleaned_text_to_sequence<br>音素→id，声调加语言偏移，语言 id]:::txt
-    AddBlank[add_blank=true 时 intersperse 插空白音素 0]:::txt
-    LoadBert[加载 *_bert.pt<br>缺失时回退随机向量 randn(1024, T)]:::txt
+    CleanedSeq["cleaned_text_to_sequence<br>音素→id，声调加语言偏移，语言 id"]:::txt
+    AddBlank["add_blank=true 时 intersperse 插空白音素 0"]:::txt
+    LoadBert["加载 *_bert.pt<br>缺失时回退随机向量 randn(1024, T)"]:::txt
     end
 
     subgraph 音频处理 get_audio
-    LoadWav[load_wav_to_torch<br>音频归一化 audio/32768.0]:::aud
-    CheckSR[校验采样率 == data.sampling_rate]:::aud
-    SpecCache[优先读 .spec.pt 缓存]:::aud
-    SpecSTFT[未缓存时 spectrogram_torch<br>2048 点 STFT，1025 频率箱，center=False]:::aud
+    LoadWav["load_wav_to_torch<br>音频归一化 audio/32768.0"]:::aud
+    CheckSR["校验采样率 == data.sampling_rate"]:::aud
+    SpecCache["优先读 .spec.pt 缓存"]:::aud
+    SpecSTFT["未缓存时 spectrogram_torch<br>2048 点 STFT，1025 频率箱，center=False"]:::aud
     end
 
     LoadList --> Shuffle --> Filter --> GetPair
@@ -1609,21 +1609,21 @@ class TextAudioSpeakerCollate:
 ```mermaid
 flowchart TB
     subgraph 判别器损失 (optim_d / optim_dur / optim_wd)
-    DiscLoss[discriminator_loss<br>LSGAN: mean((1-dr)^2) + mean(dg^2)]:::loss
+    DiscLoss["discriminator_loss<br>LSGAN: mean((1-dr)^2) + mean(dg^2)"]:::loss
     end
 
     subgraph 生成器损失 (optim_g)
-    GenLoss[generator_loss<br>mean((1-dg)^2)]:::loss
-    FMLoss[feature_loss<br>Σ|fmap_r - fmap_g| × 2]:::loss
-    MelLoss[F.l1_loss(y_mel, y_hat_mel) × c_mel]:::loss
-    KLLoss[kl_loss<br>KL(后验 vs 先验) × c_kl]:::loss
-    DurLoss[时长损失<br>SDP NLL + DP/SDP MSE]:::loss
-    LMLoss[WavLM 全层隐藏态 L1]:::loss
-    LMGenLoss[WavLM 判别器生成损失]:::loss
+    GenLoss["generator_loss<br>mean((1-dg)^2)"]:::loss
+    FMLoss["feature_loss<br>Σ|fmap_r - fmap_g| × 2"]:::loss
+    MelLoss["F.l1_loss(y_mel, y_hat_mel) × c_mel"]:::loss
+    KLLoss["kl_loss<br>KL(后验 vs 先验) × c_kl"]:::loss
+    DurLoss["时长损失<br>SDP NLL + DP/SDP MSE"]:::loss
+    LMLoss["WavLM 全层隐藏态 L1"]:::loss
+    LMGenLoss["WavLM 判别器生成损失"]:::loss
     end
 
     subgraph 总生成器损失
-    GenAll[loss_gen_all = gen + fm + mel + dur + kl + lm + lm_gen<br>(+ dur_gen 如果启用时长判别器)]:::total
+    GenAll["loss_gen_all = gen + fm + mel + dur + kl + lm + lm_gen<br>(+ dur_gen 如果启用时长判别器)"]:::total
     end
 
     DiscLoss --> GenAll
@@ -2033,15 +2033,15 @@ BookerBV2Tool [-cb 中文BERT] [-eb 英文BERT] [-jb 日文BERT] \
 ```mermaid
 flowchart TB
     Start([推理开始]):::start
-    LoadModel[加载生成器 G_*.pth<br>get_net_g → SynthesizerTrn.eval()]:::model
-    TextPre[文本前处理<br>clean_text → 音素/声调/word2ph<br>cleaned_text_to_sequence → id<br>add_blank 插空白音素<br>get_bert_feature 三路 BERT]:::text
-    EncP[enc_p 编码文本<br>→ 先验 m_p/logs_p + x_mask]:::enc
-    Dur[时长预测<br>logw = SDP×sdp_ratio + DP×(1-sdp_ratio)<br>w = exp(logw)×mask×length_scale<br>w_ceil = ceil(w)]:::dur
-    Path[generate_path 构造单调对齐 attn<br>m_p/logs_p 铺开到频谱帧]:::path
-    Sample[先验采样<br>z_p = m_p + randn×exp(logs_p)×noise_scale]:::sample
-    FlowRev[逆转流 flow(z_p, reverse=True)<br>→ 声学隐变量 z]:::flow
-    Gen[HiFi-GAN 解码 dec(z×mask, g)<br>→ 波形 o]:::gen
-    Save[soundfile.write 写出 WAV<br>采样率 data.sampling_rate]:::save
+    LoadModel["加载生成器 G_*.pth<br>get_net_g → SynthesizerTrn.eval()"]:::model
+    TextPre["文本前处理<br>clean_text → 音素/声调/word2ph<br>cleaned_text_to_sequence → id<br>add_blank 插空白音素<br>get_bert_feature 三路 BERT"]:::text
+    EncP["enc_p 编码文本<br>→ 先验 m_p/logs_p + x_mask"]:::enc
+    Dur["时长预测<br>logw = SDP×sdp_ratio + DP×(1-sdp_ratio)<br>w = exp(logw)×mask×length_scale<br>w_ceil = ceil(w)"]:::dur
+    Path["generate_path 构造单调对齐 attn<br>m_p/logs_p 铺开到频谱帧"]:::path
+    Sample["先验采样<br>z_p = m_p + randn×exp(logs_p)×noise_scale"]:::sample
+    FlowRev["逆转流 flow(z_p, reverse=True)<br>→ 声学隐变量 z"]:::flow
+    Gen["HiFi-GAN 解码 dec(z×mask, g)<br>→ 波形 o"]:::gen
+    Save["soundfile.write 写出 WAV<br>采样率 data.sampling_rate"]:::save
     End([合成完成 out.wav]):::end
 
     Start --> LoadModel --> TextPre --> EncP --> Dur --> Path --> Sample --> FlowRev --> Gen --> Save --> End
@@ -2065,14 +2065,14 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    Input[原始文本<br>"你好，世界"]:::in
-    Norm[文本规范化 text_normalize<br>数字转汉字、标点归一化]:::proc
-    G2P[G2P 字母/汉字→音素<br>chinese / japanese / english]:::proc
-    Word2ph[word2ph<br>每个音素对应多少个字符]:::proc
-    Seq[cleaned_text_to_sequence<br>音素→id、声调加语言偏移、语言 id]:::proc
-    Blank[add_blank 插空白音素 0<br>word2ph 同步翻倍]:::proc
-    Bert[get_bert_feature<br>目标语言用真实 BERT<br>其它两路用随机噪声]:::proc
-    Tensor[构造张量输入<br>x, tones, lang_ids, bert, ja_bert, en_bert]:::out
+    Input["原始文本<br>"你好，世界""]:::in
+    Norm["文本规范化 text_normalize<br>数字转汉字、标点归一化"]:::proc
+    G2P["G2P 字母/汉字→音素<br>chinese / japanese / english"]:::proc
+    Word2ph["word2ph<br>每个音素对应多少个字符"]:::proc
+    Seq["cleaned_text_to_sequence<br>音素→id、声调加语言偏移、语言 id"]:::proc
+    Blank["add_blank 插空白音素 0<br>word2ph 同步翻倍"]:::proc
+    Bert["get_bert_feature<br>目标语言用真实 BERT<br>其它两路用随机噪声"]:::proc
+    Tensor["构造张量输入<br>x, tones, lang_ids, bert, ja_bert, en_bert"]:::out
 
     Input --> Norm --> G2P --> Word2ph --> Seq --> Blank --> Bert --> Tensor
 
